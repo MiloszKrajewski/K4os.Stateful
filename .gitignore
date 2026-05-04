@@ -1,10 +1,7 @@
 .vs/
 .vscode/
-.fake/
-.paket/
 .output/
 .idea/
-paket-files/
 packages/
 
 **/bin/
