@@ -1,0 +1,56 @@
+<Project>
+
+  <!--
+  $(MSBuildThisFileDirectory) - is a variable that points to the directory of the current project file.
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />  
+  -->
+
+  <PropertyGroup>
+    <PublicAssemblyProps>$(MSBuildThisFileDirectory)\PublicAssembly.props</PublicAssemblyProps>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!--
+    This repository is not using Central Package Version Management, because it is still not good.
+    For example, "error NU1008: Projects that use central package version management should not 
+    define the version on the PackageReference" is wrong, it should be possible to mix and match.
+
+    So, for now I'll stick to Paket.
+    -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <OutputType>Library</OutputType>
+    <CheckEolTargetFramework>false</CheckEolTargetFramework>
+    <NoWarn>$(NoWarn);NU5125;NU5048</NoWarn>
+  </PropertyGroup>
+  
+  <ItemGroup Condition=" '$(IsPackable)' == 'true' ">
+    <InternalsVisibleTo Include="$(AssemblyName).Tests" />
+  </ItemGroup>
+  
+  <ItemGroup>
+    <Using Include="System" />
+    <Using Include="System.Linq" />
+    <Using Include="System.IO" />
+    <Using Include="System.Collections.Generic" />
+    <Using Include="System.Threading" />
+    <Using Include="System.Threading.Tasks" />
+  </ItemGroup>
+  
+  <!--
+  <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+  <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+  <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+  -->
+</Project>
+

@@ -1,7 +1,6 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
 using K4os.Stateful.Internal;
+using System.Linq;
 
 namespace K4os.Stateful
 {
@@ -71,7 +70,7 @@ namespace K4os.Stateful
 				var stateType = State.GetType();
 				var configs = _stateConfigCache.TryGet(
 					stateType, TryGetMode.GetOrCreate, CacheStateConfiguration);
-				configs.Reverse().Iterate(s => s.Exit(Context, State));
+				Enumerable.Reverse(configs).Iterate(s => s.Exit(Context, State));
 			}
 
 			private void OnFire(TEvent @event)
