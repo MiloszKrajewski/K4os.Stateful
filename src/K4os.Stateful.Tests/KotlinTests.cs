@@ -1,177 +1,175 @@
 using System;
 using System.Text;
-using Xunit;
 using Xunit.Abstractions;
 
-namespace K4os.Stateful.Test
+namespace K4os.Stateful.Tests;
+
+internal class Context { }
+
+internal class State { }
+
+internal class StateA: State { }
+
+internal class StateB: State { }
+
+internal class Event { }
+
+internal class EventA: Event { }
+
+internal class EventB: Event { }
+
+public class KotlinTests
 {
-	internal class Context { }
+	private readonly ITestOutputHelper _testOutputHelper;
+	private readonly StringBuilder _visited = new StringBuilder();
+	private string Visited => _visited.ToString();
 
-	internal class State { }
+	private void Visit(string state) => _visited.Append(state);
+	private void AssertVisited(string states) => Assert.Equal(states, Visited);
 
-	internal class StateA: State { }
+	private readonly StateMachine<Context, State, Event>.IConfigurator _config =
+		StateMachine<Context, State, Event>.NewConfigurator();
 
-	internal class StateB: State { }
-
-	internal class Event { }
-
-	internal class EventA: Event { }
-
-	internal class EventB: Event { }
-
-	public class KotlinTests
+	public KotlinTests(ITestOutputHelper testOutputHelper)
 	{
-		private readonly ITestOutputHelper _testOutputHelper;
-		private readonly StringBuilder _visited = new StringBuilder();
-		private string Visited => _visited.ToString();
+		_testOutputHelper = testOutputHelper;
+	}
 
-		private void Visit(string state) => _visited.Append(state);
-		private void AssertVisited(string states) => Assert.Equal(states, Visited);
+	private void Debug(string text) => _testOutputHelper.WriteLine(text);
 
-		private readonly StateMachine<Context, State, Event>.IConfigurator _config =
-			StateMachine<Context, State, Event>.NewConfigurator();
+	[Fact]
+	public void CanConfigureState()
+	{
+		_config
+			.In<StateA>()
+			.Name("StateA")
+			.OnEnter(_ => Debug("Hello from StateA"))
+			.OnExit(_ => Debug("StateA says goodbye"));
+	}
 
-		public KotlinTests(ITestOutputHelper testOutputHelper)
-		{
-			_testOutputHelper = testOutputHelper;
-		}
+	[Fact]
+	public void CannotReconfigureStateAlias()
+	{
+		Assert.Throws<InvalidOperationException>(
+			() => _config.In<StateA>().Name("x").Name("y"));
+	}
 
-		private void Debug(string text) => _testOutputHelper.WriteLine(text);
+	[Fact]
+	public void CannotReconfigureStateEnter()
+	{
+		Assert.Throws<InvalidOperationException>(
+			() => _config.In<StateA>()
+				.OnEnter(_ => Debug("once"))
+				.OnEnter(_ => Debug("twice")));
+	}
 
-		[Fact]
-		public void CanConfigureState()
-		{
-			_config
-				.In<StateA>()
-				.Name("StateA")
-				.OnEnter(_ => Debug("Hello from StateA"))
-				.OnExit(_ => Debug("StateA says goodbye"));
-		}
+	[Fact]
+	public void CannotReconfigureStateExit()
+	{
+		Assert.Throws<InvalidOperationException>(
+			() => _config.In<StateA>()
+				.OnExit(_ => Debug("once"))
+				.OnExit(_ => Debug("twice")));
+	}
 
-		[Fact]
-		public void CannotReconfigureStateAlias()
-		{
-			Assert.Throws<InvalidOperationException>(
-				() => _config.In<StateA>().Name("x").Name("y"));
-		}
+	[Fact]
+	public void AccessingSameStateReturnsSameState()
+	{
+		var x = _config.In<StateA>();
+		var y = _config.In<StateA>();
+		x.Name("x");
+		Assert.Throws<InvalidOperationException>(() => y.Name("y"));
+	}
 
-		[Fact]
-		public void CannotReconfigureStateEnter()
-		{
-			Assert.Throws<InvalidOperationException>(
-				() => _config.In<StateA>()
-					.OnEnter(_ => Debug("once"))
-					.OnEnter(_ => Debug("twice")));
-		}
+	[Fact]
+	public void AccessingSameEventCreatesNewEntry()
+	{
+		var x = _config.On<StateA, EventA>();
+		var y = _config.On<StateA, EventA>();
+		Assert.NotSame(x, y);
+	}
 
-		[Fact]
-		public void CannotReconfigureStateExit()
-		{
-			Assert.Throws<InvalidOperationException>(
-				() => _config.In<StateA>()
-					.OnExit(_ => Debug("once"))
-					.OnExit(_ => Debug("twice")));
-		}
+	[Fact]
+	public void CanChainStateAndEvent()
+	{
+		var s = _config.In<StateA>();
+		var e = s.On<EventA>();
 
-		[Fact]
-		public void AccessingSameStateReturnsSameState()
-		{
-			var x = _config.In<StateA>();
-			var y = _config.In<StateA>();
-			x.Name("x");
-			Assert.Throws<InvalidOperationException>(() => y.Name("y"));
-		}
+		s.OnEnter(_ => Debug("enter"));
+		e.OnTrigger(_ => Debug("trigger"));
+	}
 
-		[Fact]
-		public void AccessingSameEventCreatesNewEntry()
-		{
-			var x = _config.On<StateA, EventA>();
-			var y = _config.On<StateA, EventA>();
-			Assert.NotSame(x, y);
-		}
+	[Fact]
+	public void TriggersEnterOnInitialState()
+	{
+		_config.In<StateA>().OnEnter(_ => Visit("A"));
+		AssertVisited("");
 
-		[Fact]
-		public void CanChainStateAndEvent()
-		{
-			var s = _config.In<StateA>();
-			var e = s.On<EventA>();
+		_config.NewExecutor(new Context(), new StateA());
+		AssertVisited("A");
+	}
 
-			s.OnEnter(_ => Debug("enter"));
-			e.OnTrigger(_ => Debug("trigger"));
-		}
+	[Fact]
+	public void TriggersExitOnExit()
+	{
+		_config.In<StateA>()
+			.OnEnter(_ => Visit("Ea"))
+			.OnExit(_ => Visit("Xa"));
+		_config.In<StateB>()
+			.OnEnter(_ => Visit("Eb"));
 
-		[Fact]
-		public void TriggersEnterOnInitialState()
-		{
-			_config.In<StateA>().OnEnter(_ => Visit("A"));
-			AssertVisited("");
-
-			_config.NewExecutor(new Context(), new StateA());
-			AssertVisited("A");
-		}
-
-		[Fact]
-		public void TriggersExitOnExit()
-		{
-			_config.In<StateA>()
-				.OnEnter(_ => Visit("Ea"))
-				.OnExit(_ => Visit("Xa"));
-			_config.In<StateB>()
-				.OnEnter(_ => Visit("Eb"));
-
-			_config.On<StateA, EventA>()
-				.Goto(
-					_ => {
-						Visit("Gab");
-						return new StateB();
-					});
-
-			AssertVisited("");
-
-			var exe = _config.NewExecutor(new Context(), new StateA());
-			AssertVisited("Ea");
-			exe.Fire(new EventA());
-
-			AssertVisited("EaXaGabEb");
-			Assert.IsType<StateB>(exe.State);
-		}
-
-		[Fact]
-		public void EnterIsTriggeredBottomUp()
-		{
-			_config.In<State>().OnEnter(_ => Visit("0"));
-			_config.In<StateA>().OnEnter(_ => Visit("A"));
-			_config.On<StateB, EventA>().Goto(
+		_config.On<StateA, EventA>()
+			.Goto(
 				_ => {
-					Visit("G");
-					return new StateA();
-				});
-			var exe = _config.NewExecutor(new Context(), new StateB());
-			AssertVisited("0");
-			exe.Fire(new EventA());
-			AssertVisited("0G0A");
-		}
-
-		[Fact]
-		public void ExitIsTriggeredTopDown()
-		{
-			_config.In<State>().OnExit(_ => Visit("0"));
-			_config.In<StateA>().OnExit(_ => Visit("A"));
-			_config.On<StateA, Event>().Goto(
-				_ => {
-					Visit("Ga");
+					Visit("Gab");
 					return new StateB();
 				});
-			_config.On<StateB, Event>().Goto(
-				_ => {
-					Visit("Gb");
-					return new StateA();
-				});
-			var exe = _config.NewExecutor(new Context(), new StateA());
-			AssertVisited("");
-			exe.Fire(new Event()); // StateA -> StateB
-			AssertVisited("GaA0");
-		}
+
+		AssertVisited("");
+
+		var exe = _config.NewExecutor(new Context(), new StateA());
+		AssertVisited("Ea");
+		exe.Fire(new EventA());
+
+		AssertVisited("EaXaGabEb");
+		Assert.IsType<StateB>(exe.State);
+	}
+
+	[Fact]
+	public void EnterIsTriggeredBottomUp()
+	{
+		_config.In<State>().OnEnter(_ => Visit("0"));
+		_config.In<StateA>().OnEnter(_ => Visit("A"));
+		_config.On<StateB, EventA>().Goto(
+			_ => {
+				Visit("G");
+				return new StateA();
+			});
+		var exe = _config.NewExecutor(new Context(), new StateB());
+		AssertVisited("0");
+		exe.Fire(new EventA());
+		AssertVisited("0G0A");
+	}
+
+	[Fact]
+	public void ExitIsTriggeredTopDown()
+	{
+		_config.In<State>().OnExit(_ => Visit("0"));
+		_config.In<StateA>().OnExit(_ => Visit("A"));
+		_config.On<StateA, Event>().Goto(
+			_ => {
+				Visit("Ga");
+				return new StateB();
+			});
+		_config.On<StateB, Event>().Goto(
+			_ => {
+				Visit("Gb");
+				return new StateA();
+			});
+		var exe = _config.NewExecutor(new Context(), new StateA());
+		AssertVisited("");
+		exe.Fire(new Event()); // StateA -> StateB
+		AssertVisited("GaA0");
 	}
 }
 

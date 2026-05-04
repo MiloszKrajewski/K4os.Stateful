@@ -1,7 +1,6 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Reflection;
+using System.Linq;
 
 namespace K4os.Stateful.Internal
 {
@@ -80,7 +79,7 @@ namespace K4os.Stateful.Internal
 					yield return i;
 			}
 
-			if (baseType.InheritsFrom(grandparent))
+			if (baseType is not null && baseType.InheritsFrom(grandparent))
 			{
 				yield return baseType;
 			}

@@ -10,3 +10,4 @@ packages/
 .secrets.cfg
 
 *.bak
+*.sln.DotSettings.user

@@ -1,8 +1,0 @@
-Microsoft.Extensions.DependencyInjection
-Microsoft.Extensions.Logging
-Microsoft.Extensions.Hosting
-
-Serilog
-Serilog.Sinks.Console
-Serilog.Extensions.Hosting
-Serilog.Settings.Configuration
