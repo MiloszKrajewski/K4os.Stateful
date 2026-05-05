@@ -654,7 +654,7 @@ all sit at rank 0, all fire before `C`. Secondary sort within interfaces: **decl
 
 **Key distinction between the two systems:**
 
-| | Rules (`.In<T>.On<E>`) | Entry/Exit (`.OnEnter<T>`) |
+| | Event handlers (`.In<T>.On<E>`) | State handlers (`.OnEnter<T>` / `.OnExit<T>`) |
 |---|---|---|
 | How many fire? | **One** — first match in sort order | **All** — every handler whose `T` is assignable from actual state |
 | Sort/order | `(distance, class/interface, hasGuard, declarationOrder)` | Descending rank (entry); ascending (exit); interface before class within rank |
@@ -742,13 +742,13 @@ string json = JsonSerializer.Serialize(executor.State);  // any serializer
 The library serializes nothing. `executor.State` returns the raw state object;
 `executor.Start(context, state)` accepts any state of type `TState` — deserialized or fresh.
 
-### Rule matching & ranking
+### Event handler matching & ranking
 
-Rules share the same **distance** concept as entry/exit handlers, but the algorithm is
-**winner-takes-all**: rules are sorted and walked top-to-bottom; the first rule whose guard
-passes (short-circuit) fires. No rule fires twice.
+Event handlers share the same **distance** concept as state handlers, but the algorithm is
+**winner-takes-all**: handlers are sorted and walked top-to-bottom; the first handler whose guard
+passes (short-circuit) fires. No handler fires twice.
 
-Rules are sorted by a four-part key:
+Event handlers are sorted by a four-part key:
 
 | Key | Direction | Meaning |
 |-----|-----------|---------|
@@ -764,7 +764,7 @@ c.In<B>().On<E>().When(x => x.State.Count > 0).GoTo(...)// (1, class, guarded, 2
 c.In<A>().On<E>().GoTo(...)                              // (2, class, unguarded, 3) — catch-all
 ```
 
-If no rule matches → `Fire` throws `UnhandledEventException`; `TryFire` returns `false`.
+If no handler matches → `Fire` throws `UnhandledEventException`; `TryFire` returns `false`.
 
 ### Settled design notes
 
@@ -776,7 +776,7 @@ Lambda composition for sequencing is the caller's responsibility — no chaining
 **Unhandled events** — no static analysis, no `BuildStrict()`. That would be a false promise
 (guards are arbitrary lambdas; subtype enumeration is unbounded). `Build()` is enough.
 At runtime: `TryFire` returns `false`, `Fire` throws `UnhandledEventException`.
-Users who want a guaranteed catch-all add it themselves:
+Users who want a guaranteed catch-all add a handler themselves:
 ```csharp
 c.In<TState>().On<TEvent>().Stay(x => x.Context.Logger.LogWarning("Unhandled"));  // sync extension
 ```

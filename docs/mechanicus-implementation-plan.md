@@ -1,8 +1,8 @@
 # .NET State Machine Library — Implementation Plan
 
 > **Status:** In progress
-> **Last updated:** 2026-05-02
-> **Companion document:** [STATE_MACHINE_LIBRARY.md](STATE_MACHINE_LIBRARY.md) — requirements, design decisions, DSL spec
+> **Last updated:** 2026-05-05
+> **Companion document:** [mechanicus-design.md](mechanicus-design.md) — requirements, design decisions, DSL spec
 
 ---
 
@@ -34,6 +34,8 @@ Layer 13: Nested states (data pattern)
 
 ### Layer 1 — Distance Algorithm
 
+**Design reference:** [mechanicus-design.md § Distance algorithm](mechanicus-design.md#distance-algorithm-classes--interfaces)
+
 **What it is:**
 A pure function that, given an actual runtime type and a registered handler type, returns an integer
 distance representing how specific the match is. This is the foundation for both rule ranking and
@@ -61,11 +63,13 @@ distance(actualType: Type, registeredType: Type) → int
 
 ---
 
-### Layer 2 — Rule Ranking / Sort
+### Layer 2 — Event Handler Ranking / Sort
+
+**Design reference:** [mechanicus-design.md § Event handler matching & ranking](mechanicus-design.md#event-handler-matching--ranking)
 
 **What it is:**
-Rules are sorted by a four-part composite key before evaluation. The sort order determines which rule
-is tried first when multiple rules could match a given `(state, event)` pair.
+Event handlers are sorted by a four-part composite key before evaluation. The sort order determines
+which handler is tried first when multiple handlers could match a given `(state, event)` pair.
 
 **Sort key (from spec):**
 
@@ -73,39 +77,51 @@ is tried first when multiple rules could match a given `(state, event)` pair.
 |-----|-----------|---------|
 | `distance` | ASC (smaller = more specific) | concrete type beats base type |
 | `class / interface` | class first | class beats interface at same distance |
-| `hasGuard` | guarded first | conditional rule beats unconditional fallback |
+| `hasGuard` | guarded first | conditional handler beats unconditional fallback |
 | `declarationOrder` | ASC (earlier first) | stable tie-break |
 
 **Test concepts:**
-- Concrete-type rule sorts before base-type rule
-- Class rule sorts before interface rule at same distance
-- Guarded rule sorts before unguarded at same distance and class/interface rank
+- Concrete-type handler sorts before base-type handler
+- Class handler sorts before interface handler at same distance
+- Guarded handler sorts before unguarded at same distance and class/interface rank
 - Declaration order resolves remaining ties stably
-- Full four-key sort: mixed rules produce the correct ordered list
+- Full four-key sort: mixed handlers produce the correct ordered list
 
 ---
 
 ### Layer 3 — Guard Evaluation
 
+**Design reference:** [mechanicus-design.md § Event handler matching & ranking](mechanicus-design.md#event-handler-matching--ranking), [§ .When — single lambda shape](mechanicus-design.md#when--single-lambda-shape)
+
 **What it is:**
-Walking the sorted rule list and short-circuiting at the first rule whose guard passes.
+Walking the sorted handler list and short-circuiting at the first handler whose guard passes.
 Depends on Layer 1 (distance) and Layer 2 (sort) to produce the ordered candidate list.
 
 **Test concepts:**
-- First passing guard fires; second matching rule does NOT fire (short-circuit)
+- First passing guard fires; second matching handler does NOT fire (short-circuit)
 - Guard returns `false` → falls through to the next candidate
 - All guards fail → caller receives "no match" signal (throws or returns false)
-- Unguarded rule acts as fallback (fires when all guarded rules above it fail)
-- Guard throws → exception propagates immediately; no state change, no further rules evaluated
+- Unguarded handler acts as fallback (fires when all guarded handlers above it fail)
+- Guard throws → exception propagates immediately; no state change, no further handlers evaluated
 - Async guard — `ValueTask<bool>` is awaited correctly
 
 ---
 
 ### Layer 4 — DSL / Builder
 
+**Design reference:** [mechanicus-design.md § Fluent chain — type threading](mechanicus-design.md#fluent-chain--type-threading), [§ Facet interfaces](mechanicus-design.md#facet-interfaces--one-class-multiple-visible-surfaces), [§ Configuration DSL (revised)](mechanicus-design.md#configuration-dsl-revised), [§ Handler bundle — Activation](mechanicus-design.md#handler-bundle--activationtcontext-tcurrentstate-tcurrentevent)
+
 **What it is:**
 The fluent configuration chain. Tests here verify that calling the DSL methods registers the expected
-rules in the internal rule table — not that those rules execute correctly (that is Layer 7+).
+handlers in the internal handler tables — not that those handlers execute correctly (that is Layer 7+).
+
+**Key types:**
+- `EventHandler<TContext, TState, TEvent>` — frozen event handler (state type, event type, guard, action)
+- `EventHandlerConfig<TContext, TState, TEvent>` — mutable twin; accumulated across `In→On→When→GoTo/Stay`
+- `StateHandler<TContext, TState>` — frozen state lifecycle handler (state type, OnEnter, OnExit)
+- `StateHandlerConfig<TContext, TState, TCurrentState>` — mutable twin; accumulated across `In→OnEnter/OnExit`
+- `Activation<TContext, TCurrentState, TCurrentEvent>` — lambda bundle for `When` / `GoTo` / `Stay`
+- `Activation<TContext, TCurrentState>` — lambda bundle for `OnEnter` / `OnExit` / `Auto`
 
 **Key interfaces (from spec):**
 - `IMachineConfig` — entry point; exposes `In<T>()` and `Build()`
@@ -113,21 +129,27 @@ rules in the internal rule table — not that those rules execute correctly (tha
 - `IEventConfig<TState, TEvent>` — returned by `On<T>()`
 - `IGuardedEventConfig<TState, TEvent>` — returned by `When()`; no second `.When()` available
 
+**`MachineDefinition` internal structure:**
+- `_eventHandlers: EventHandler<TContext, TState, TEvent>[]` — all registered event handlers (frozen)
+- `_stateHandlers: StateHandler<TContext, TState>[]` — all registered state handlers (frozen); OnEnter iterates forward (base → derived), OnExit iterates in reverse (derived → base)
+
 **Test concepts:**
-- `In<T>().On<E>().GoTo(fn)` registers one rule with correct state type, event type, and handler
-- `In<T>().On<E>().When(guard).GoTo(fn)` registers a guarded rule
-- `In<T>().On<E>().Stay()` registers a stay rule
-- `In<T>().On<E>().Stay(callback)` registers a stay rule with a side-effect callback
-- `In<T>().OnEnter(fn)` registers an entry handler
-- `In<T>().OnExit(fn)` registers an exit handler
-- Chained style and disconnected style register identical rules
-- `Build()` freezes the definition; the returned `StateMachine<C,S,E>` is immutable
+- `In<T>().On<E>().GoTo(fn)` registers one `EventHandler` with correct state type, event type, and action
+- `In<T>().On<E>().When(guard).GoTo(fn)` registers a guarded `EventHandler`
+- `In<T>().On<E>().Stay()` registers a stay `EventHandler`
+- `In<T>().On<E>().Stay(callback)` registers a stay `EventHandler` with a side-effect callback
+- `In<T>().OnEnter(fn)` registers a `StateHandler` with an entry callback
+- `In<T>().OnExit(fn)` registers a `StateHandler` with an exit callback
+- Chained style and disconnected style register identical handlers
+- `Build()` freezes the definition; the returned `MachineDefinition<C,S,E>` is immutable
 - Extension method overloads (sync, `Task<>`) are accepted and wrapped correctly
 - `.When().When()` is a compile-time error (only `IGuardedEventConfig` returned, which has no `.When()`)
 
 ---
 
 ### Layer 5 — Entry / Exit Firing Order
+
+**Design reference:** [mechanicus-design.md § Entry / Exit — hierarchical firing order](mechanicus-design.md#entry--exit--hierarchical-firing-order)
 
 **What it is:**
 When a state transition is detected, entry and exit handlers fire for every type in the actual state's
@@ -151,6 +173,8 @@ inheritance chain that has a registered handler. Unlike rules (one fires), entry
 
 ### Layer 6 — State-Change Predicate
 
+**Design reference:** [mechanicus-design.md § D1 — What triggers entry/exit actions?](mechanicus-design.md#d1--what-triggers-entryexit-actions--resolved)
+
 **What it is:**
 Entry/exit handlers only fire when the state-change predicate returns `true` for
 `(previousState, nextState)`. The default is `!ReferenceEquals(s1, s2)`.
@@ -168,6 +192,8 @@ Entry/exit handlers only fire when the state-change predicate returns `true` for
 ---
 
 ### Layer 7 — Transitions (Happy Paths)
+
+**Design reference:** [mechanicus-design.md § .GoTo — async, sync, and state-only overloads](mechanicus-design.md#goto--async-sync-and-state-only-overloads), [§ Firing events](mechanicus-design.md#firing-events)
 
 **What it is:**
 The full `FireAsync`/`TryFireAsync` execution path: find the matching rule (Layers 1–3), execute the
@@ -189,6 +215,8 @@ handler, apply the new state, evaluate the predicate (Layer 6), run entry/exit (
 
 ### Layer 8 — Unhandled Events
 
+**Design reference:** [mechanicus-design.md § R6 — Invalid transition handling](mechanicus-design.md#r6--invalid-transition-handling), [§ Unhandled events](mechanicus-design.md#settled-design-notes)
+
 **What it is:**
 Behaviour when no rule matches for the given `(state, event)` pair (either no rule exists, or all
 guards failed).
@@ -202,6 +230,8 @@ guards failed).
 ---
 
 ### Layer 9 — Executor Lifecycle
+
+**Design reference:** [mechanicus-design.md § Executor — lifecycle and state portability](mechanicus-design.md#executor--lifecycle-and-state-portability)
 
 **What it is:**
 Creation, startup, and state access for executor instances.
@@ -217,6 +247,8 @@ Creation, startup, and state access for executor instances.
 
 ### Layer 10 — Thread Safety
 
+**Design reference:** [mechanicus-design.md § Thread safety](mechanicus-design.md#settled-design-notes)
+
 **What it is:**
 Concurrent `FireAsync` calls on the same executor are detected and rejected.
 The executor is single-threaded by contract; the caller is responsible for serialising access.
@@ -228,6 +260,8 @@ The executor is single-threaded by contract; the caller is responsible for seria
 ---
 
 ### Layer 11 — Error Propagation
+
+**Design reference:** [mechanicus-design.md § Error propagation](mechanicus-design.md#settled-design-notes)
 
 **What it is:**
 Exceptions in any handler propagate immediately. State must NOT change if an exception occurs
@@ -244,6 +278,8 @@ during the transition.
 
 ### Layer 12 — CancellationToken
 
+**Design reference:** [mechanicus-design.md § Handler bundle — Activation](mechanicus-design.md#handler-bundle--activationtcontext-tcurrentstate-tcurrentevent)
+
 **What it is:**
 The `CancellationToken` passed to `FireAsync(event, ct)` must flow through to `x.CancellationToken`
 in every lambda: `.When`, `.GoTo`, `.Stay`, `OnEnter`, `OnExit`.
@@ -257,6 +293,8 @@ in every lambda: `.When`, `.GoTo`, `.Stay`, `OnEnter`, `OnExit`.
 ---
 
 ### Layer 13 — Nested States (Data Pattern)
+
+**Design reference:** [mechanicus-design.md § Covered differently — not a gap](mechanicus-design.md#covered-differently--not-a-gap) (`.SubstateOf()` row)
 
 **What it is:**
 Nesting is a **data pattern**, not a library feature. A nested state carries a `Parent` field of type
@@ -272,6 +310,8 @@ nested JSON automatically.
 ---
 
 ### Layer 14 — Auto Transitions (Completion Transitions)
+
+**Design reference:** [mechanicus-design.md § .Auto() — completion transitions](mechanicus-design.md#auto--completion-transitions)
 
 **What it is:**
 A state can declare an automatic transition that fires after `OnEnter` completes, without any external

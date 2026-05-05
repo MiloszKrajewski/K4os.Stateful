@@ -14,8 +14,12 @@ dotnet pack src/K4os.Stateful.sln           # Pack NuGet packages
 
 To run a single test class or method:
 ```
-dotnet test src/K4os.Stateful.Tests/K4os.Stateful.Tests.csproj --filter "FullyQualifiedName~CalculatorTests"
+dotnet test src/K4os.Stateful.Legacy.Tests/K4os.Stateful.Legacy.Tests.csproj --filter "FullyQualifiedName~CalculatorTests"
 ```
+
+## Project Layout
+
+The solution contains four projects. `K4os.Stateful.Legacy` holds the current implementation and `K4os.Stateful.Legacy.Tests` holds its tests. `K4os.Stateful` and `K4os.Stateful.Tests` are empty stubs reserved for a future redesigned API.
 
 ## Architecture
 
@@ -75,7 +79,7 @@ Implementation: `Internal/ReflectionExtender.cs` — `TypeDistance()` walks base
 
 ## Tests
 
-XUnit 2.5 in `src/K4os.Stateful.Tests/`:
+XUnit 2.5 in `src/K4os.Stateful.Legacy.Tests/`:
 
 - `CalculatorTests.cs` — end-to-end example: expression calculator state machine
 - `ConfigurationTests.cs` — configuration API contract and error cases
