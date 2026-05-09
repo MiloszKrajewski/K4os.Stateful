@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace K4os.Stateful.Internal;
+namespace K4os.Stateful.Runtime;
 
 internal static class TypeExtensions
 {
@@ -23,7 +23,7 @@ internal static class TypeExtensions
 
     private static int? ComputeDistance(Type child, Type parent) =>
         child == parent ? 0 :
-        child.IsInterface ? parent.IsInterface ? ComputeInterfaceDistance(parent, child) : null :
+        child.IsInterface ? parent.IsInterface ? ComputeInterfaceDistance(child, parent) : null :
         parent.IsInterface ? ComputeClassToInterfaceDistance(child, parent) :
         ComputeClassDistance(child, parent);
 

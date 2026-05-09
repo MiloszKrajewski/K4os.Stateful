@@ -1,4 +1,4 @@
-using K4os.Stateful.Internal;
+using K4os.Stateful.Runtime;
 
 namespace K4os.Stateful.Tests;
 

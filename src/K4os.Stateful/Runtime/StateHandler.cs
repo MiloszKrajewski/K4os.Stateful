@@ -1,4 +1,4 @@
-namespace K4os.Stateful.Internal;
+namespace K4os.Stateful.Runtime;
 
 internal sealed class StateHandler<TContext, TState>
     where TState: class

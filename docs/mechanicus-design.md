@@ -330,9 +330,9 @@ public interface IMachineConfig
 public interface IStateConfig<TCurrentState> where TCurrentState : TState
 {
     IStateConfig<TCurrentState> OnEnter(
-        Func<StateActivation<TContext, TCurrentState>, ValueTask> callback);
+        Func<Activation<TContext, TCurrentState>, ValueTask> callback);
     IStateConfig<TCurrentState> OnExit(
-        Func<StateActivation<TContext, TCurrentState>, ValueTask> callback);
+        Func<Activation<TContext, TCurrentState>, ValueTask> callback);
 
     IEventConfig<TCurrentState, TCurrentEvent> On<TCurrentEvent>()
         where TCurrentEvent : TEvent;
@@ -343,29 +343,17 @@ public interface IStateConfig<TCurrentState> where TCurrentState : TState
     StateMachine<TContext, TState, TEvent> Build();
 }
 
-// Event facet — returned by On<T>()
-// .When() is available once; calling it returns IGuardedEventConfig which has no .When()
-// This prevents ambiguous double-guard constructions (.When(a).When(b) — AND or OR?)
+// Event facet — returned by On<T>() and by When()
+// Multiple .When() calls accumulate as AND logic — all guards must pass.
 public interface IEventConfig<TCurrentState, TCurrentEvent>
     where TCurrentState : TState
     where TCurrentEvent : TEvent
 {
-    // Returns the *guarded* facet — .When() no longer available after this
-    IGuardedEventConfig<TCurrentState, TCurrentEvent> When(
+    // Returns itself — may be called again to add more guards (AND semantics)
+    IEventConfig<TCurrentState, TCurrentEvent> When(
         Func<Activation<TContext, TCurrentState, TCurrentEvent>, ValueTask<bool>> guard);
 
-    // Terminals also available without a guard (unguarded fallback)
-    IStateConfig<TCurrentState> GoTo(
-        Func<Activation<TContext, TCurrentState, TCurrentEvent>, ValueTask<TState>> next);
-    IStateConfig<TCurrentState> Stay(
-        Func<Activation<TContext, TCurrentState, TCurrentEvent>, ValueTask>? action = null);
-}
-
-// Guarded facet — returned by .When(); terminals only, no second .When()
-public interface IGuardedEventConfig<TCurrentState, TCurrentEvent>
-    where TCurrentState : TState
-    where TCurrentEvent : TEvent
-{
+    // Terminals — available with or without a prior .When()
     IStateConfig<TCurrentState> GoTo(
         Func<Activation<TContext, TCurrentState, TCurrentEvent>, ValueTask<TState>> next);
     IStateConfig<TCurrentState> Stay(
@@ -385,15 +373,17 @@ right facet to register the next handler (`.On<T>`) or pivot to a new state (`.I
 
 **Callback storage:** All callbacks are stored internally as `Func<Activation<TContext, TState, TEvent>, ValueTask<X>>` — using the **base** state and event types (`TState`, `TEvent`), not the concrete chain types. When registering `In<AS>().On<AE>().GoTo(fn)`, the builder wraps the lambda: `activation => fn(new Activation<C, AS, AE>((AS)activation.State, (AE)activation.Event, ...))`. Async-native callers using `async x => ...` reach the interface directly with zero overhead.
 
-**`IGuardedEventConfig` cost:** Disallowing a second `.When()` requires one extra facet interface.
-This is the explicit, accepted cost. The alternative — allowing `.When().When()` — raises the
-question of AND vs OR semantics and is therefore disallowed outright.
+**Multiple `.When()` calls — AND semantics:** Calling `.When()` more than once on the same
+`IEventConfig` accumulates guards — all must pass. This resolves the AND vs OR ambiguity in
+favour of AND, the only supported composition. Callers who need OR semantics write a single
+lambda with `||` inside.
 
 **Implementation:** A small number of concrete builder classes implement these interfaces.
 The outer `StateMachine<C,S,E>` itself can implement `IMachineConfig`; a single inner class
 `StateConfigBuilder<TCurrentState>` can implement `IStateConfig<TCurrentState>`;
-`EventConfigBuilder<TCurrentState, TCurrentEvent>` can implement both `IEventConfig<...>` and
-`IGuardedEventConfig<...>` — the same object, just returned under different interfaces.
+`EventConfigBuilder<TCurrentState, TCurrentEvent>` implements `IEventConfig<...>` — returned
+from both `.On<T>()` and `.When()`, so callers always hold the same interface regardless of
+how many guards have been added.
 The concrete types are never written by callers — `var` and method chaining mean types are
 always inferred. The interfaces are the only visible contract.
 
@@ -417,7 +407,7 @@ Instead, all lambdas receive **one `Activation` object** with named properties.
 .GoTo(async x => { await x.Context.Sounds.PlayAsync(x.Event.Title, x.CancellationToken); return x.State; })
 ```
 
-#### `Activation<TContext, TCurrentState, TCurrentEvent>`
+#### `Activation<TContext, TCurrentState, TCurrentEvent>` and `Activation<TContext, TCurrentState>`
 
 ```csharp
 // Used by .When / .GoTo / .Stay — full bundle including the triggering event
@@ -429,8 +419,8 @@ public sealed class Activation<TContext, TCurrentState, TCurrentEvent>
     public CancellationToken CancellationToken { get; }  // from the Fire/TryFire call site
 }
 
-// Used by OnEnter / OnExit — no Event (entry/exit is not tied to a specific event type)
-public sealed class StateActivation<TContext, TCurrentState>
+// Used by OnEnter / OnExit / Auto — no Event (entry/exit is not tied to a specific event type)
+public sealed class Activation<TContext, TCurrentState>
 {
     public TContext          Context           { get; }
     public TCurrentState     State             { get; }
@@ -460,7 +450,7 @@ The library has no opinion on what "emitting an event" means. That is entirely t
 | `.When(x => ...)` | `x.State`, `x.Event`, maybe `x.Context` | interface: `ValueTask<bool>`; sync/Task forms via extension methods |
 | `.GoTo(async x => ...)` | all of `x` — side effects + state decision | async; returns `TState` |
 | `.Stay(async x => ...)` | `x.Context`, `x.CancellationToken` | optional callback; state ref unchanged |
-| `.OnEnter/OnExit(x => …)` | `x.Context`, `x.State` | `StateActivation` — no Event |
+| `.OnEnter/OnExit(x => …)` | `x.Context`, `x.State` | `Activation<TContext, TState>` — no Event |
 
 #### Revised examples
 
@@ -657,17 +647,18 @@ all sit at rank 0, all fire before `C`. Secondary sort within interfaces: **decl
 | | Event handlers (`.In<T>.On<E>`) | State handlers (`.OnEnter<T>` / `.OnExit<T>`) |
 |---|---|---|
 | How many fire? | **One** — first match in sort order | **All** — every handler whose `T` is assignable from actual state |
-| Sort/order | `(distance, class/interface, hasGuard, declarationOrder)` | Descending rank (entry); ascending (exit); interface before class within rank |
+| Sort/order | `(stateDistance, stateClass/Interface, eventDistance, eventClass/Interface, hasGuard, declarationOrder)` | Descending rank (entry); ascending (exit); interface before class within rank |
 | No match | `UnhandledEventException` / `TryFire` returns false | Silent (no handler registered at that level) |
 
-### `.When` — single lambda shape
+### `.When` — single lambda shape, AND accumulation
 
 With `x.State` and `x.Event` both available, there is **one lambda shape** instead of three.
 The interface declares the `ValueTask<bool>` form; extension methods add sync `bool` and `Task<bool>` overloads.
+Multiple `.When()` calls on the same handler accumulate as AND — all guards must pass.
 
 ```csharp
 .When(x => !x.State.IsLocked)             // sync extension — state only
-.When(x => x.Event.IsForced)              // sync extension — event only
+.When(x => x.Event.IsForced)              // sync extension — event only; AND with above if chained
 .When(x => x.State.Count < x.Event.Max)  // sync extension — state + event, same signature
 .When(async x => await x.Context.Db.IsAllowedAsync(x.State.Id, x.CancellationToken))  // interface — ValueTask<bool>
 ```
@@ -748,20 +739,22 @@ Event handlers share the same **distance** concept as state handlers, but the al
 **winner-takes-all**: handlers are sorted and walked top-to-bottom; the first handler whose guard
 passes (short-circuit) fires. No handler fires twice.
 
-Event handlers are sorted by a four-part key:
+Event handlers are sorted by a six-part key:
 
 | Key | Direction | Meaning |
 |-----|-----------|---------|
-| `distance` | ASC (smaller first) | concrete subtype beats base type |
-| `class / interface` | class first | class beats interface at same distance |
+| state `distance` | ASC (smaller first) | concrete state subtype beats base type |
+| state `class / interface` | class first | class beats interface at same state distance |
+| event `distance` | ASC (smaller first) | concrete event subtype beats base type |
+| event `class / interface` | class first | class beats interface at same event distance |
 | `hasGuard` | guarded first | conditional rule beats unconditional fallback |
 | `declarationOrder` | ASC (earlier first) | stable tie-break; user controls by ordering declarations |
 
 ```csharp
-c.In<C>().On<E>().When(x => x.State.IsReady).GoTo(...)  // (0, class, guarded, 0) — tried first
-c.In<C>().On<E>().GoTo(...)                              // (0, class, unguarded, 1) — fallback
-c.In<B>().On<E>().When(x => x.State.Count > 0).GoTo(...)// (1, class, guarded, 2)
-c.In<A>().On<E>().GoTo(...)                              // (2, class, unguarded, 3) — catch-all
+c.In<C>().On<E>().When(x => x.State.IsReady).GoTo(...)  // (0, class, 0, class, guarded, 0) — tried first
+c.In<C>().On<E>().GoTo(...)                              // (0, class, 0, class, unguarded, 1) — fallback
+c.In<B>().On<E>().When(x => x.State.Count > 0).GoTo(...)// (1, class, 0, class, guarded, 2)
+c.In<A>().On<E>().GoTo(...)                              // (2, class, 0, class, unguarded, 3) — catch-all
 ```
 
 If no handler matches → `Fire` throws `UnhandledEventException`; `TryFire` returns `false`.
@@ -816,6 +809,8 @@ concrete-type rules for mutation are cleanly separate without any framework magi
 
 ### `.Auto()` — completion transitions
 
+> ⚠️ **Not yet implemented** — Layer 14 (planned; depends on Layers 5 and 7).
+
 A state can declare an **automatic transition** that fires immediately after `OnEnter` completes,
 without waiting for an external event. This is the completion transition / epsilon transition from
 UML state machines.
@@ -828,7 +823,7 @@ c.In<DeviceConnectedState>()
      : (IDeviceState)new UnregisteredState(...));
 ```
 
-**Lambda shape:** Receives `StateActivation<TContext, TCurrentState>` (same as `OnEnter`/`OnExit`) —
+**Lambda shape:** Receives `Activation<TContext, TCurrentState>` (same as `OnEnter`/`OnExit`) —
 there is no triggering event.
 
 **"No transition" semantics:** Return the same reference → predicate sees no change → stays in
@@ -863,7 +858,7 @@ public interface IStateConfig<TCurrentState> where TCurrentState : TState
 {
     // ... existing members ...
     IStateConfig<TCurrentState> Auto(
-        Func<StateActivation<TContext, TCurrentState>, ValueTask<TState>> handler);
+        Func<Activation<TContext, TCurrentState>, ValueTask<TState>> handler);
 }
 ```
 
@@ -891,6 +886,7 @@ Extension methods provide sync and `Task<TState>` overloads, matching the patter
 - All guards fail → `UnhandledEventException` / `TryFire` returns false
 - Declaration order resolves tie between two unguarded rules at same distance
 - Guard throws → exception propagates, no state change
+- Multiple `.When()` calls on the same handler use AND logic — all must pass to fire
 
 ### Entry / exit firing
 - Entry fires base → derived order on transition in
@@ -958,7 +954,7 @@ Extension methods provide sync and `Task<TState>` overloads, matching the patter
 - Chain of Auto transitions — final state reached before `FireAsync` returns to caller
 - Auto on a state with no further Auto — stops cleanly
 - `Start()` does NOT trigger `Auto` (same reasoning as `OnEnter`)
-- `Auto` lambda receives `StateActivation` (no event) — context and state available
+- `Auto` lambda receives `Activation<TContext, TCurrentState>` (no event) — context and state available
 - Cancellation token flows through to `Auto` lambda
 - Exception in `Auto` propagates; state is left at the state that triggered the Auto
 

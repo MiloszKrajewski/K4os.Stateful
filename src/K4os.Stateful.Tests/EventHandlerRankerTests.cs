@@ -1,5 +1,5 @@
-using K4os.Stateful.Internal;
-using EventHandler = K4os.Stateful.Internal.EventHandler;
+using K4os.Stateful.Runtime;
+using EventHandler = K4os.Stateful.Runtime.EventHandler;
 
 namespace K4os.Stateful.Tests;
 

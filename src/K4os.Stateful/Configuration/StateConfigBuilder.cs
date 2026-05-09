@@ -1,8 +1,8 @@
-using K4os.Stateful.Internal;
+using K4os.Stateful.Runtime;
 
-namespace K4os.Stateful;
+namespace K4os.Stateful.Configuration;
 
-public partial class StateMachine<TContext, TState, TEvent>
+public partial class StateMachineConfig<TContext, TState, TEvent>
     where TState: class
     where TEvent: class
 {
@@ -29,23 +29,25 @@ public partial class StateMachine<TContext, TState, TEvent>
 
         public IStateConfig<TCurrentState> OnEnter(Func<Activation<TContext, TCurrentState>, ValueTask> callback)
         {
-            var prev = _config.OnEnter;
-            if (prev is null)
-                _config.OnEnter = x => callback(x.Convert<TCurrentState>());
-            else
-                _config.OnEnter = async x => { await prev(x); await callback(x.Convert<TCurrentState>()); };
+            _config.OnEnter = Combine(_config.OnEnter, callback);
             return this;
         }
 
         public IStateConfig<TCurrentState> OnExit(Func<Activation<TContext, TCurrentState>, ValueTask> callback)
         {
-            var prev = _config.OnExit;
-            if (prev is null)
-                _config.OnExit = x => callback(x.Convert<TCurrentState>());
-            else
-                _config.OnExit = async x => { await prev(x); await callback(x.Convert<TCurrentState>()); };
+            _config.OnExit = Combine(_config.OnExit, callback);
             return this;
         }
+        
+        private static Func<Activation<TContext, TState>, ValueTask> Combine(
+            Func<Activation<TContext, TState>, ValueTask>? prev,
+            Func<Activation<TContext, TCurrentState>, ValueTask> callback) =>
+            prev is null
+                ? x => callback(x.Convert<TCurrentState>())
+                : async x => {
+                    await prev(x);
+                    await callback(x.Convert<TCurrentState>());
+                };
 
         public IEventConfig<TCurrentState, TCurrentEvent> On<TCurrentEvent>()
             where TCurrentEvent: class, TEvent =>

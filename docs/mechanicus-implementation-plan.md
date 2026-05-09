@@ -32,7 +32,7 @@ Layer 13: Nested states (data pattern)
 
 ## Sub-tasks
 
-### Layer 1 — Distance Algorithm
+### Layer 1 — Distance Algorithm ✅
 
 **Design reference:** [mechanicus-design.md § Distance algorithm](mechanicus-design.md#distance-algorithm-classes--interfaces)
 
@@ -63,33 +63,39 @@ distance(actualType: Type, registeredType: Type) → int
 
 ---
 
-### Layer 2 — Event Handler Ranking / Sort
+### Layer 2 — Event Handler Ranking / Sort ✅
 
 **Design reference:** [mechanicus-design.md § Event handler matching & ranking](mechanicus-design.md#event-handler-matching--ranking)
 
 **What it is:**
-Event handlers are sorted by a four-part composite key before evaluation. The sort order determines
+Event handlers are sorted by a six-part composite key before evaluation. The sort order determines
 which handler is tried first when multiple handlers could match a given `(state, event)` pair.
 
 **Sort key (from spec):**
 
 | Key | Direction | Meaning |
 |-----|-----------|---------|
-| `distance` | ASC (smaller = more specific) | concrete type beats base type |
-| `class / interface` | class first | class beats interface at same distance |
+| state `distance` | ASC (smaller = more specific) | concrete state type beats base type |
+| state `class / interface` | class first | class beats interface at same state distance |
+| event `distance` | ASC (smaller = more specific) | concrete event type beats base type |
+| event `class / interface` | class first | class beats interface at same event distance |
 | `hasGuard` | guarded first | conditional handler beats unconditional fallback |
 | `declarationOrder` | ASC (earlier first) | stable tie-break |
 
 **Test concepts:**
-- Concrete-type handler sorts before base-type handler
-- Class handler sorts before interface handler at same distance
+- Concrete state-type handler sorts before base state-type handler
+- Concrete event-type handler sorts before base event-type handler (at same state distance)
+- Class handler sorts before interface handler at same distance (both axes)
 - Guarded handler sorts before unguarded at same distance and class/interface rank
 - Declaration order resolves remaining ties stably
-- Full four-key sort: mixed handlers produce the correct ordered list
+- Full six-key sort: mixed handlers produce the correct ordered list
 
 ---
 
-### Layer 3 — Guard Evaluation
+### Layer 3 — Guard Evaluation ⚠️ Partial
+
+> AND-guard combining in `EventHandlerConfig` is done. The executor walk (short-circuit through
+> the ranked list) is part of Layer 7 and not yet implemented.
 
 **Design reference:** [mechanicus-design.md § Event handler matching & ranking](mechanicus-design.md#event-handler-matching--ranking), [§ .When — single lambda shape](mechanicus-design.md#when--single-lambda-shape)
 
@@ -104,10 +110,11 @@ Depends on Layer 1 (distance) and Layer 2 (sort) to produce the ordered candidat
 - Unguarded handler acts as fallback (fires when all guarded handlers above it fail)
 - Guard throws → exception propagates immediately; no state change, no further handlers evaluated
 - Async guard — `ValueTask<bool>` is awaited correctly
+- Multiple `.When()` calls on the same handler use AND logic — all must pass to fire
 
 ---
 
-### Layer 4 — DSL / Builder
+### Layer 4 — DSL / Builder ✅
 
 **Design reference:** [mechanicus-design.md § Fluent chain — type threading](mechanicus-design.md#fluent-chain--type-threading), [§ Facet interfaces](mechanicus-design.md#facet-interfaces--one-class-multiple-visible-surfaces), [§ Configuration DSL (revised)](mechanicus-design.md#configuration-dsl-revised), [§ Handler bundle — Activation](mechanicus-design.md#handler-bundle--activationtcontext-tcurrentstate-tcurrentevent)
 
@@ -126,8 +133,7 @@ handlers in the internal handler tables — not that those handlers execute corr
 **Key interfaces (from spec):**
 - `IMachineConfig` — entry point; exposes `In<T>()` and `Build()`
 - `IStateConfig<TCurrentState>` — returned by `In<T>()`, `GoTo()`, `Stay()`
-- `IEventConfig<TState, TEvent>` — returned by `On<T>()`
-- `IGuardedEventConfig<TState, TEvent>` — returned by `When()`; no second `.When()` available
+- `IEventConfig<TState, TEvent>` — returned by `On<T>()` and by `When()`; multiple `.When()` calls accumulate with AND logic
 
 **`MachineDefinition` internal structure:**
 - `_eventHandlers: EventHandler<TContext, TState, TEvent>[]` — all registered event handlers (frozen)
@@ -143,7 +149,7 @@ handlers in the internal handler tables — not that those handlers execute corr
 - Chained style and disconnected style register identical handlers
 - `Build()` freezes the definition; the returned `MachineDefinition<C,S,E>` is immutable
 - Extension method overloads (sync, `Task<>`) are accepted and wrapped correctly
-- `.When().When()` is a compile-time error (only `IGuardedEventConfig` returned, which has no `.When()`)
+- Multiple `.When()` calls accumulate as AND logic (all guards must pass; each call returns `IEventConfig<>` itself)
 
 ---
 

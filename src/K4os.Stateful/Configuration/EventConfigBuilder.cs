@@ -1,8 +1,8 @@
-using K4os.Stateful.Internal;
+using K4os.Stateful.Runtime;
 
-namespace K4os.Stateful;
+namespace K4os.Stateful.Configuration;
 
-public partial class StateMachine<TContext, TState, TEvent>
+public partial class StateMachineConfig<TContext, TState, TEvent>
     where TState: class
     where TEvent: class
 {

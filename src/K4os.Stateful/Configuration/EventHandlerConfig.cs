@@ -1,4 +1,7 @@
-namespace K4os.Stateful.Internal;
+using K4os.Stateful.Internal;
+using K4os.Stateful.Runtime;
+
+namespace K4os.Stateful.Configuration;
 
 // Mutable accumulator for one In<TCS>().On<TCE>()...GoTo/Stay() chain.
 // Populated across multiple DSL calls; converted to a frozen EventHandler at GoTo/Stay time.

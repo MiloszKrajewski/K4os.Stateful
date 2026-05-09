@@ -1,3 +1,5 @@
+using K4os.Stateful.Runtime;
+
 namespace K4os.Stateful.Tests;
 
 public class ActivationTests

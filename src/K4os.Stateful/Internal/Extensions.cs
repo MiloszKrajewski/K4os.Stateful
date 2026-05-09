@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
-namespace K4os.Stateful;
+namespace K4os.Stateful.Internal;
 
 internal static class Extensions
 {

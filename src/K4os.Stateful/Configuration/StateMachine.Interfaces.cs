@@ -1,7 +1,13 @@
-namespace K4os.Stateful;
+using K4os.Stateful.Runtime;
 
-public partial class StateMachine<TContext, TState, TEvent>
+namespace K4os.Stateful.Configuration;
+
+public partial class StateMachineConfig<TContext, TState, TEvent>
+    where TState: class
+    where TEvent: class
 {
+    internal static IMachineConfig CreateBuilder() => new MachineConfigBuilder();
+    
     public interface IMachineConfig
     {
         IStateConfig<TCurrentState> In<TCurrentState>() where TCurrentState: class, TState;

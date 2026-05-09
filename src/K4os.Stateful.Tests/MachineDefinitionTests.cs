@@ -1,4 +1,4 @@
-using K4os.Stateful.Internal;
+using K4os.Stateful.Runtime;
 
 namespace K4os.Stateful.Tests;
 
@@ -28,7 +28,7 @@ public class MachineDefinitionTests
         var farther = Handler(typeof(State), typeof(ConcreteEvent), order: 1);
         var definition = Definition(closer, farther);
 
-        var result = definition.GetRankedHandlers(typeof(ConcreteState), typeof(ConcreteEvent));
+        var result = definition.GetEventHandlers(typeof(ConcreteState), typeof(ConcreteEvent));
 
         Assert.Equal(2, result.Length);
         Assert.Equal(closer, result[0]);
@@ -41,8 +41,8 @@ public class MachineDefinitionTests
         var handler = Handler(typeof(ConcreteState), typeof(ConcreteEvent));
         var definition = Definition(handler);
 
-        var first = definition.GetRankedHandlers(typeof(ConcreteState), typeof(ConcreteEvent));
-        var second = definition.GetRankedHandlers(typeof(ConcreteState), typeof(ConcreteEvent));
+        var first = definition.GetEventHandlers(typeof(ConcreteState), typeof(ConcreteEvent));
+        var second = definition.GetEventHandlers(typeof(ConcreteState), typeof(ConcreteEvent));
 
         Assert.Same(first, second);
     }
@@ -57,7 +57,7 @@ public class MachineDefinitionTests
 
         var results = new EventHandler<Ctx, State, Event>[64][];
         Parallel.For(0, 64, i =>
-            results[i] = definition.GetRankedHandlers(typeof(ConcreteState), typeof(ConcreteEvent)));
+            results[i] = definition.GetEventHandlers(typeof(ConcreteState), typeof(ConcreteEvent)));
 
         Assert.All(results, r => Assert.Equal(10, r.Length));
     }

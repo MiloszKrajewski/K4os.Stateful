@@ -1,4 +1,6 @@
-namespace K4os.Stateful.Internal;
+using K4os.Stateful.Runtime;
+
+namespace K4os.Stateful.Configuration;
 
 // Mutable accumulator for one In<TCurrentState>() context.
 // Delegates are stored already wrapped to base types; wrapping happens in StateConfigBuilder<TCS>.

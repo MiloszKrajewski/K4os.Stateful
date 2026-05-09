@@ -1,4 +1,4 @@
-namespace K4os.Stateful;
+namespace K4os.Stateful.Runtime;
 
 public static class Activation
 {

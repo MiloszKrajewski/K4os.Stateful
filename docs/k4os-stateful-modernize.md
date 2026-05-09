@@ -60,7 +60,7 @@ The current library has no "frozen" definition object — configuration and exec
 
 | Current | Target |
 |---|---|
-| `IStateContext<TActualState>` — `.Context`, `.State` | `StateActivation<TContext, TCurrentState>` — `.Context`, `.State`, `.CancellationToken` |
+| `IStateContext<TActualState>` — `.Context`, `.State` | `Activation<TContext, TCurrentState>` — `.Context`, `.State`, `.CancellationToken` |
 | `IEventContext<TActualState, TActualEvent>` — extends above, adds `.Event` | `Activation<TContext, TCurrentState, TCurrentEvent>` — `.Context`, `.State`, `.Event`, `.CancellationToken` |
 
 The `CancellationToken` field is new and must flow from every `FireAsync` call to every lambda in the chain.
@@ -74,11 +74,11 @@ The `CancellationToken` field is new and must flow from every `FireAsync` call t
 
 The distinction matters: `Stay()` is now a terminal that the executor treats like any `GoTo`, but the predicate outcome controls whether entry/exit fires.
 
-#### B6. `IGuardedEventConfig` facet
+#### B6. `.When()` guard accumulation
 
 Current: `.When()` returns the same `IEventConfigurator` — a second `.When()` is allowed and silently overwrites the first.
 
-Target: `.When()` returns `IGuardedEventConfig<S,E>` which has only `GoTo` and `Stay` — no second `.When()` is possible at compile time.
+Target: `.When()` returns `IEventConfig<S,E>` itself — multiple calls accumulate with AND semantics (all guards must pass). `IGuardedEventConfig` was considered but dropped; AND is the only supported composition.
 
 #### B7. `OnEnter` / `OnExit` single vs multiple
 
@@ -238,10 +238,10 @@ File: `Internal/ReflectionExtender.cs` (rewrite)
 
 ### Step 2 — Core data types
 
-Files: `Activation.cs`, `StateActivation.cs`, `Exceptions.cs`
+Files: `Activation.cs`, `Exceptions.cs`
 
 - `Activation<TContext, TCurrentState, TCurrentEvent>` — `.Context`, `.State`, `.Event`, `.CancellationToken`
-- `StateActivation<TContext, TCurrentState>` — `.Context`, `.State`, `.CancellationToken`
+- `Activation<TContext, TCurrentState>` — `.Context`, `.State`, `.CancellationToken` (used by OnEnter/OnExit/Auto)
 - `UnhandledEventException`
 - `ConcurrentFireException`
 
@@ -255,8 +255,7 @@ Files: inside `StateMachine<TContext, TState, TEvent>` as nested interfaces
 
 - `IMachineConfig` — `In<T>()`, `WithStateChangeIf(pred)`, `Build()`
 - `IStateConfig<TCurrentState>` — `OnEnter(fn)`, `OnExit(fn)`, `Auto(fn)`, `On<TEvent>()`, `In<T>()`, `Build()`
-- `IEventConfig<TS, TE>` — `When(guard)`, `GoTo(fn)`, `Stay(fn?)`
-- `IGuardedEventConfig<TS, TE>` — `GoTo(fn)`, `Stay(fn?)`
+- `IEventConfig<TS, TE>` — `When(guard)` (returns self, AND-accumulates), `GoTo(fn)`, `Stay(fn?)`
 
 Define only the `ValueTask`-based interface members. Extension methods come in Step 4.
 
@@ -285,7 +284,7 @@ Implement the concrete builder classes behind the interfaces from Step 3:
 
 - `MachineConfigBuilder` implements `IMachineConfig`
 - `StateConfigBuilder<TS>` implements `IStateConfig<TS>`
-- `EventConfigBuilder<TS, TE>` implements `IEventConfig<TS,TE>` and `IGuardedEventConfig<TS,TE>`
+- `EventConfigBuilder<TS, TE>` implements `IEventConfig<TS,TE>`
 
 Each builder accumulates registered rules/handlers into an internal list (raw, unsorted). `Build()` freezes all lists into immutable arrays and returns a `StateMachine<C,S,E>` instance.
 
@@ -449,7 +448,7 @@ Unit tests: see Layer 11 concepts in `mechanicus-implementation-plan.md`.
 
 ### Step 16 — CancellationToken (Layer 12)
 
-The `ct` passed to `FireAsync(event, ct)` is threaded into every `Activation`/`StateActivation` constructed during that fire. Verify:
+The `ct` passed to `FireAsync(event, ct)` is threaded into every `Activation` constructed during that fire. Verify:
 - Token reaches every lambda type (`GoTo`, `Stay`, `When`, `OnEnter`, `OnExit`, `Auto`)
 - Cancellation in `GoTo` propagates as `OperationCanceledException`; state unchanged
 
@@ -497,12 +496,12 @@ These Stateless features are **explicitly not supported** in the target design:
 ```
 src/K4os.Stateful/
   StateMachine.cs                   — static entry point; Define<C,S,E>()
-  StateMachine.Interfaces.cs        — IMachineConfig, IStateConfig<T>, IEventConfig<S,E>, IGuardedEventConfig<S,E>
+  StateMachine.Interfaces.cs        — IMachineConfig, IStateConfig<T>, IEventConfig<S,E>
   StateMachine.Configurator.cs      — MachineConfigBuilder
   StateMachine.StateBuilder.cs      — StateConfigBuilder<TS>
   StateMachine.EventBuilder.cs      — EventConfigBuilder<TS,TE>
   StateMachine.Executor.cs          — Executor; FireAsync, TryFireAsync, Start, State
-  Activation.cs                     — Activation<C,S,E> and StateActivation<C,S>
+  Activation.cs                     — Activation<C,S,E> and Activation<C,S>
   Exceptions.cs                     — UnhandledEventException, ConcurrentFireException
   StateMachineExtensions.cs         — sync / Task<> overloads for DSL methods
   Internal/

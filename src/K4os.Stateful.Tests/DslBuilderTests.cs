@@ -1,5 +1,5 @@
-using K4os.Stateful.Internal;
-using EventHandler = K4os.Stateful.Internal.EventHandler;
+using K4os.Stateful.Runtime;
+using EventHandler = K4os.Stateful.Runtime.EventHandler;
 
 namespace K4os.Stateful.Tests;
 
@@ -15,16 +15,16 @@ public class DslBuilderTests
     private record EventX : IEvent;
     private record EventY : IEvent;
 
-    private static StateMachine<Ctx, IState, IEvent>.IMachineConfig Define() =>
+    private static Configuration.StateMachineConfig<Ctx, IState, IEvent>.IMachineConfig Define() =>
         StateMachine.Define<Ctx, IState, IEvent>();
 
     // ── Helper to inspect EventHandlers from a MachineDefinition ─────────────
 
     private static EventHandler<Ctx, IState, IEvent>[] AllEventHandlers(
         MachineDefinition<Ctx, IState, IEvent> def) =>
-        def.GetRankedHandlers(typeof(StateA), typeof(EventX))
-            .Concat(def.GetRankedHandlers(typeof(StateA), typeof(EventY)))
-            .Concat(def.GetRankedHandlers(typeof(StateB), typeof(EventX)))
+        def.GetEventHandlers(typeof(StateA), typeof(EventX))
+            .Concat(def.GetEventHandlers(typeof(StateA), typeof(EventY)))
+            .Concat(def.GetEventHandlers(typeof(StateB), typeof(EventX)))
             .Distinct()
             .ToArray();
 
@@ -37,7 +37,7 @@ public class DslBuilderTests
             .In<StateA>().On<EventX>().GoTo(x => ValueTask.FromResult<IState>(new StateB()))
             .Build();
 
-        var handlers = def.GetRankedHandlers(typeof(StateA), typeof(EventX));
+        var handlers = def.GetEventHandlers(typeof(StateA), typeof(EventX));
 
         Assert.Single(handlers);
         Assert.Equal(typeof(StateA), handlers[0].StateType);
@@ -55,7 +55,7 @@ public class DslBuilderTests
             .GoTo(x => ValueTask.FromResult<IState>(new StateB()))
             .Build();
 
-        var handlers = def.GetRankedHandlers(typeof(StateA), typeof(EventX));
+        var handlers = def.GetEventHandlers(typeof(StateA), typeof(EventX));
 
         Assert.Single(handlers);
         Assert.True(handlers[0].HasGuard);
@@ -69,7 +69,7 @@ public class DslBuilderTests
             .In<StateA>().On<EventX>().Stay()
             .Build();
 
-        var handlers = def.GetRankedHandlers(typeof(StateA), typeof(EventX));
+        var handlers = def.GetEventHandlers(typeof(StateA), typeof(EventX));
 
         Assert.Single(handlers);
         Assert.False(handlers[0].HasGuard);
@@ -84,7 +84,7 @@ public class DslBuilderTests
             .In<StateA>().On<EventX>().Stay(x => { ran = true; })
             .Build();
 
-        var handlers = def.GetRankedHandlers(typeof(StateA), typeof(EventX));
+        var handlers = def.GetEventHandlers(typeof(StateA), typeof(EventX));
         var state = new StateA();
         var ctx = new Ctx();
         var activation = new Activation<Ctx, IState, IEvent>(ctx, state, new EventX(), CancellationToken.None);
@@ -101,7 +101,7 @@ public class DslBuilderTests
             .In<StateA>().On<EventX>().Stay()
             .Build();
 
-        var handlers = def.GetRankedHandlers(typeof(StateA), typeof(EventX));
+        var handlers = def.GetEventHandlers(typeof(StateA), typeof(EventX));
         var state = new StateA();
         var activation = new Activation<Ctx, IState, IEvent>(new Ctx(), state, new EventX(), CancellationToken.None);
         var result = await handlers[0].Action(activation);
@@ -118,8 +118,8 @@ public class DslBuilderTests
                 .On<EventY>().Stay()
             .Build();
 
-        var handlersX = def.GetRankedHandlers(typeof(StateA), typeof(EventX));
-        var handlersY = def.GetRankedHandlers(typeof(StateA), typeof(EventY));
+        var handlersX = def.GetEventHandlers(typeof(StateA), typeof(EventX));
+        var handlersY = def.GetEventHandlers(typeof(StateA), typeof(EventY));
 
         Assert.Single(handlersX);
         Assert.Single(handlersY);
@@ -139,10 +139,10 @@ public class DslBuilderTests
         disconnected.In<StateB>().On<EventX>().Stay();
         var disconnectedDef = disconnected.Build();
 
-        var chainedA = chained.GetRankedHandlers(typeof(StateA), typeof(EventX));
-        var disconnectedA = disconnectedDef.GetRankedHandlers(typeof(StateA), typeof(EventX));
-        var chainedB = chained.GetRankedHandlers(typeof(StateB), typeof(EventX));
-        var disconnectedB = disconnectedDef.GetRankedHandlers(typeof(StateB), typeof(EventX));
+        var chainedA = chained.GetEventHandlers(typeof(StateA), typeof(EventX));
+        var disconnectedA = disconnectedDef.GetEventHandlers(typeof(StateA), typeof(EventX));
+        var chainedB = chained.GetEventHandlers(typeof(StateB), typeof(EventX));
+        var disconnectedB = disconnectedDef.GetEventHandlers(typeof(StateB), typeof(EventX));
 
         Assert.Single(chainedA);
         Assert.Single(disconnectedA);
@@ -160,7 +160,7 @@ public class DslBuilderTests
             .In<StateA>().On<EventX>().GoTo(_ => (IState)expected)
             .Build();
 
-        var handlers = def.GetRankedHandlers(typeof(StateA), typeof(EventX));
+        var handlers = def.GetEventHandlers(typeof(StateA), typeof(EventX));
         var activation = new Activation<Ctx, IState, IEvent>(new Ctx(), new StateA(), new EventX(), CancellationToken.None);
         var result = await handlers[0].Action(activation);
 
@@ -176,7 +176,7 @@ public class DslBuilderTests
             .In<StateA>().OnEnter(x => { })
             .Build();
 
-        var handlers = def.GetSortedStateHandlers(typeof(StateA));
+        var handlers = def.GetStateHandlers(typeof(StateA));
 
         Assert.Single(handlers);
         Assert.Equal(typeof(StateA), handlers[0].StateType);
@@ -191,7 +191,7 @@ public class DslBuilderTests
             .In<StateA>().OnExit(x => { })
             .Build();
 
-        var handlers = def.GetSortedStateHandlers(typeof(StateA));
+        var handlers = def.GetStateHandlers(typeof(StateA));
 
         Assert.Single(handlers);
         Assert.Equal(typeof(StateA), handlers[0].StateType);
@@ -208,7 +208,7 @@ public class DslBuilderTests
                 .OnExit(x => { })
             .Build();
 
-        var handlers = def.GetSortedStateHandlers(typeof(StateA));
+        var handlers = def.GetStateHandlers(typeof(StateA));
 
         Assert.Single(handlers);
         Assert.NotNull(handlers[0].OnEnter);
@@ -225,7 +225,7 @@ public class DslBuilderTests
                 .OnEnter(x => { calls.Add(2); })
             .Build();
 
-        var handlers = def.GetSortedStateHandlers(typeof(StateA));
+        var handlers = def.GetStateHandlers(typeof(StateA));
         Assert.Single(handlers);
 
         await handlers[0].OnEnter!(new Activation<Ctx, IState>(new Ctx(), new StateA(), CancellationToken.None));
@@ -245,7 +245,7 @@ public class DslBuilderTests
             .GoTo(x => ValueTask.FromResult<IState>(new StateB()))
             .Build();
 
-        var handlers = def.GetRankedHandlers(typeof(StateA), typeof(EventX));
+        var handlers = def.GetEventHandlers(typeof(StateA), typeof(EventX));
         var activation = new Activation<Ctx, IState, IEvent>(
             new Ctx(), new StateA(), new EventX(), CancellationToken.None);
 
@@ -263,7 +263,7 @@ public class DslBuilderTests
             .GoTo(x => ValueTask.FromResult<IState>(new StateB()))
             .Build();
 
-        var handlers = def.GetRankedHandlers(typeof(StateA), typeof(EventX));
+        var handlers = def.GetEventHandlers(typeof(StateA), typeof(EventX));
         var activation = new Activation<Ctx, IState, IEvent>(
             new Ctx(), new StateA(), new EventX(), CancellationToken.None);
 
@@ -280,7 +280,7 @@ public class DslBuilderTests
             .GoTo(x => ValueTask.FromResult<IState>(new StateB()))
             .Build();
 
-        var handlers = def.GetRankedHandlers(typeof(StateA), typeof(EventX));
+        var handlers = def.GetEventHandlers(typeof(StateA), typeof(EventX));
         var activation = new Activation<Ctx, IState, IEvent>(
             new Ctx(), new StateA(), new EventX(), CancellationToken.None);
 
@@ -296,8 +296,8 @@ public class DslBuilderTests
         var def1 = config.Build();
         var def2 = config.Build();
 
-        var h1 = def1.GetRankedHandlers(typeof(StateA), typeof(EventX));
-        var h2 = def2.GetRankedHandlers(typeof(StateA), typeof(EventX));
+        var h1 = def1.GetEventHandlers(typeof(StateA), typeof(EventX));
+        var h2 = def2.GetEventHandlers(typeof(StateA), typeof(EventX));
 
         Assert.NotSame(def1, def2);
         Assert.NotSame(h1, h2);

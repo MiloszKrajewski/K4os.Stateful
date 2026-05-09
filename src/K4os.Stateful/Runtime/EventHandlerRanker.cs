@@ -1,4 +1,4 @@
-namespace K4os.Stateful.Internal;
+namespace K4os.Stateful.Runtime;
 
 internal static class EventHandlerRanker
 {
