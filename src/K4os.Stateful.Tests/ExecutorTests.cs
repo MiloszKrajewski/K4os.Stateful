@@ -25,7 +25,7 @@ public class ExecutorTests
     private static IState Throw(Exception ex) => throw ex;
 
     private static Configuration.StateMachineConfig<Ctx, IState, IEvent>.IMachineConfig Config() =>
-        StateMachine.Define<Ctx, IState, IEvent>();
+        StateMachine.Configure<Ctx, IState, IEvent>();
 
     private static MachineExecutor<Ctx, IState, IEvent> Build(
         Action<Configuration.StateMachineConfig<Ctx, IState, IEvent>.IMachineConfig> configure,
@@ -43,9 +43,9 @@ public class ExecutorTests
     public void Start_SetsState_WithoutFiringOnEnter()
     {
         var entered = false;
-        var config = Config();
-        config.In<StateA>().OnEnter(_ => { entered = true; });
-        var executor = config.Build().Create(new Ctx(), new StateA());
+        var executor = Config()
+            .In<StateA>().OnEnter(_ => { entered = true; })
+            .Build().Create(new Ctx(), new StateA());
 
         Assert.IsType<StateA>(executor.State);
         Assert.False(entered);
@@ -170,7 +170,7 @@ public class ExecutorTests
     }
 
     [Fact]
-    public async Task OnEnter_MultipleRegistrationsForSameType_AllFireInSomeOrder()
+    public async Task OnEnter_MultipleRegistrationsForSameType_FireInDeclarationOrder()
     {
         var log = new List<string>();
 
@@ -181,9 +181,37 @@ public class ExecutorTests
 
         await executor.FireAsync(new EventA());
 
-        Assert.Equal(2, log.Count);
-        Assert.Contains("first", log);
-        Assert.Contains("second", log);
+        Assert.Equal(["first", "second"], log);
+    }
+
+    [Fact]
+    public async Task OnEnter_SplitAcrossTwoInBlocks_FiresInDeclarationOrder()
+    {
+        var log = new List<string>();
+
+        var executor = Build(c => c
+            .In<StateB>().OnEnter(_ => log.Add("first"))
+            .In<StateA>().On<EventA>().GoTo(_ => new StateB())
+            .In<StateB>().OnEnter(_ => log.Add("second")));
+
+        await executor.FireAsync(new EventA());
+
+        Assert.Equal(["first", "second"], log);
+    }
+
+    [Fact]
+    public async Task OnExit_SplitAcrossTwoInBlocks_FiresInDeclarationOrder()
+    {
+        var log = new List<string>();
+
+        var executor = Build(c => c
+            .In<StateA>().OnExit(_ => log.Add("first"))
+            .In<StateA>().On<EventA>().GoTo(_ => new StateB())
+            .In<StateA>().OnExit(_ => log.Add("second")));
+
+        await executor.FireAsync(new EventA());
+
+        Assert.Equal(["first", "second"], log);
     }
 
     // ── 7.x State-Change Predicate ─────────────────────────────────────────────
@@ -460,10 +488,7 @@ public class ExecutorTests
         var executor = Build(c => c
             .In<IState>().On<IEvent>().Stay());
 
-        var exception = await Record.ExceptionAsync(() =>
-            executor.FireAsync(new EventA()).AsTask());
-
-        Assert.Null(exception);
+        await executor.FireAsync(new EventA());
     }
 
     [Fact]

@@ -12,20 +12,20 @@ public partial class StateMachineConfig<TContext, TState, TEvent>
         where TCurrentEvent: class, TEvent
     {
         private readonly StateConfigBuilder<TCurrentState> _state;
-        private readonly MachineConfigBuilder _machine;
         private readonly EventHandlerConfig<TContext, TState, TEvent> _config;
 
         internal EventConfigBuilder(
             StateConfigBuilder<TCurrentState> state,
+            StateHandlerConfig<TContext, TState, TEvent> stateConfig,
             MachineConfigBuilder machine)
         {
             _state = state;
-            _machine = machine;
             _config = new EventHandlerConfig<TContext, TState, TEvent> {
                 StateType = typeof(TCurrentState),
                 EventType = typeof(TCurrentEvent),
                 DeclarationOrder = machine.NextOrder(),
             };
+            stateConfig.EventHandlers.Add(_config);
         }
 
         public IEventConfig<TCurrentState, TCurrentEvent> When(
@@ -36,9 +36,9 @@ public partial class StateMachineConfig<TContext, TState, TEvent>
         }
 
         public IStateConfig<TCurrentState> GoTo(
-            Func<Activation<TContext, TCurrentState, TCurrentEvent>, ValueTask<TState>> next)
+            Func<Activation<TContext, TCurrentState, TCurrentEvent>, ValueTask<TState>> transition)
         {
-            _config.Action = x => next(x.Convert<TCurrentState, TCurrentEvent>());
+            _config.Action = x => transition(x.Convert<TCurrentState, TCurrentEvent>());
             return Commit();
         }
 
@@ -57,7 +57,7 @@ public partial class StateMachineConfig<TContext, TState, TEvent>
 
         private IStateConfig<TCurrentState> Commit()
         {
-            _machine.AddEventHandler(_config.ToFrozen());
+            _config.IsComplete = true;
             return _state;
         }
     }

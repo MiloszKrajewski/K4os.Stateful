@@ -24,6 +24,8 @@ internal sealed class EventHandlerConfig<TContext, TState, TEvent>
 
     public bool HasGuard => _guards is { Count: > 0 };
 
+    public bool IsComplete { get; set; }
+
     public Func<Activation<TContext, TState, TEvent>, ValueTask<TState>>? Action { get; set; }
 
     public EventHandler<TContext, TState, TEvent> ToFrozen()

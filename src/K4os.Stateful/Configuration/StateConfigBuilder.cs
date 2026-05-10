@@ -10,60 +10,35 @@ public partial class StateMachineConfig<TContext, TState, TEvent>
         where TCurrentState: class, TState
     {
         private readonly MachineConfigBuilder _machine;
-        private readonly StateHandlerConfig<TContext, TState> _config = new();
+        private readonly StateHandlerConfig<TContext, TState, TEvent> _config;
 
         internal StateConfigBuilder(MachineConfigBuilder machine)
         {
             _machine = machine;
-        }
-
-        private void Flush()
-        {
-            if (_config.OnEnter is null && _config.OnExit is null)
-                return;
-
-            _machine.AddStateHandler(_config.ToFrozen(typeof(TCurrentState), _machine.NextOrder()));
-            _config.OnEnter = null;
-            _config.OnExit = null;
+            _config = machine.GetOrCreateStateConfig(typeof(TCurrentState));
         }
 
         public IStateConfig<TCurrentState> OnEnter(Func<Activation<TContext, TCurrentState>, ValueTask> callback)
         {
-            _config.OnEnter = Combine(_config.OnEnter, callback);
+            _config.AddOnEnter(x => callback(x.Convert<TCurrentState>()));
             return this;
         }
 
         public IStateConfig<TCurrentState> OnExit(Func<Activation<TContext, TCurrentState>, ValueTask> callback)
         {
-            _config.OnExit = Combine(_config.OnExit, callback);
+            _config.AddOnExit(x => callback(x.Convert<TCurrentState>()));
             return this;
         }
-        
-        private static Func<Activation<TContext, TState>, ValueTask> Combine(
-            Func<Activation<TContext, TState>, ValueTask>? prev,
-            Func<Activation<TContext, TCurrentState>, ValueTask> callback) =>
-            prev is null
-                ? x => callback(x.Convert<TCurrentState>())
-                : async x => {
-                    await prev(x);
-                    await callback(x.Convert<TCurrentState>());
-                };
 
         public IEventConfig<TCurrentState, TCurrentEvent> On<TCurrentEvent>()
             where TCurrentEvent: class, TEvent =>
-            new EventConfigBuilder<TCurrentState, TCurrentEvent>(this, _machine);
+            new EventConfigBuilder<TCurrentState, TCurrentEvent>(this, _config, _machine);
 
         public IStateConfig<TNextState> In<TNextState>()
-            where TNextState: class, TState
-        {
-            Flush();
-            return new StateConfigBuilder<TNextState>(_machine);
-        }
+            where TNextState: class, TState =>
+            new StateConfigBuilder<TNextState>(_machine);
 
-        public MachineDefinition<TContext, TState, TEvent> Build()
-        {
-            Flush();
-            return _machine.Build();
-        }
+        public MachineDefinition<TContext, TState, TEvent> Build() =>
+            _machine.Build();
     }
 }

@@ -1,3 +1,5 @@
+#pragma warning disable xUnit1051
+
 using K4os.Stateful.Runtime;
 using EventHandler = K4os.Stateful.Runtime.EventHandler;
 
@@ -8,15 +10,19 @@ public class DslBuilderTests
     private class Ctx;
 
     private interface IState;
-    private record StateA(bool Flag = false) : IState;
-    private record StateB : IState;
+
+    private record StateA(bool Flag = false): IState;
+
+    private record StateB: IState;
 
     private interface IEvent;
-    private record EventX : IEvent;
-    private record EventY : IEvent;
+
+    private record EventX: IEvent;
+
+    private record EventY: IEvent;
 
     private static Configuration.StateMachineConfig<Ctx, IState, IEvent>.IMachineConfig Define() =>
-        StateMachine.Define<Ctx, IState, IEvent>();
+        StateMachine.Configure<Ctx, IState, IEvent>();
 
     // ── Helper to inspect EventHandlers from a MachineDefinition ─────────────
 
@@ -114,8 +120,8 @@ public class DslBuilderTests
     {
         var def = Define()
             .In<StateA>()
-                .On<EventX>().GoTo(x => ValueTask.FromResult<IState>(new StateB()))
-                .On<EventY>().Stay()
+            .On<EventX>().GoTo(x => ValueTask.FromResult<IState>(new StateB()))
+            .On<EventY>().Stay()
             .Build();
 
         var handlersX = def.GetEventHandlers(typeof(StateA), typeof(EventX));
@@ -161,7 +167,8 @@ public class DslBuilderTests
             .Build();
 
         var handlers = def.GetEventHandlers(typeof(StateA), typeof(EventX));
-        var activation = new Activation<Ctx, IState, IEvent>(new Ctx(), new StateA(), new EventX(), CancellationToken.None);
+        var activation = new Activation<Ctx, IState, IEvent>(
+            new Ctx(), new StateA(), new EventX(), CancellationToken.None);
         var result = await handlers[0].Action(activation);
 
         Assert.Same(expected, result);
@@ -204,8 +211,8 @@ public class DslBuilderTests
     {
         var def = Define()
             .In<StateA>()
-                .OnEnter(x => { })
-                .OnExit(x => { })
+            .OnEnter(x => { })
+            .OnExit(x => { })
             .Build();
 
         var handlers = def.GetStateHandlers(typeof(StateA));
@@ -221,8 +228,8 @@ public class DslBuilderTests
         var calls = new List<int>();
         var def = Define()
             .In<StateA>()
-                .OnEnter(x => { calls.Add(1); })
-                .OnEnter(x => { calls.Add(2); })
+            .OnEnter(x => { calls.Add(1); })
+            .OnEnter(x => { calls.Add(2); })
             .Build();
 
         var handlers = def.GetStateHandlers(typeof(StateA));
@@ -231,6 +238,73 @@ public class DslBuilderTests
         await handlers[0].OnEnter!(new Activation<Ctx, IState>(new Ctx(), new StateA(), CancellationToken.None));
 
         Assert.Equal([1, 2], calls);
+    }
+
+    // ── Disconnected-style registration ──────────────────────────────────────
+
+    [Fact]
+    public async Task DisconnectedStyle_OnEnter_FiresOnTransitionIntoState()
+    {
+        var log = new List<string>();
+        var config = Define();
+        config.In<StateB>().OnEnter(_ => log.Add("entered-B"));
+        config.In<StateA>().On<EventX>().GoTo(_ => (IState)new StateB());
+        var executor = config.Build().Create(new Ctx(), new StateA());
+
+        await executor.FireAsync(new EventX());
+
+        Assert.Equal(["entered-B"], log);
+    }
+
+    // ── Incomplete handler detection ──────────────────────────────────────────
+
+    [Fact]
+    public void Build_Throws_WhenOnEventHasNoTerminal()
+    {
+        var config = Define();
+        config.In<StateA>().On<EventX>();
+
+        var ex = Assert.Throws<IncompleteEventHandlerException>(() => config.Build());
+        Assert.Equal(typeof(StateA), ex.StateType);
+        Assert.Equal(typeof(EventX), ex.EventType);
+    }
+
+    [Fact]
+    public void Build_Throws_WhenOnEventWithGuardHasNoTerminal()
+    {
+        var config = Define();
+        config.In<StateA>().On<EventX>().When(_ => true);
+
+        Assert.Throws<IncompleteEventHandlerException>(() => config.Build());
+    }
+
+    [Fact]
+    public void Build_Succeeds_AfterCompletingIncompleteHandler()
+    {
+        var config = Define();
+        var h = config.In<StateA>().On<EventX>();
+        Assert.Throws<IncompleteEventHandlerException>(() => config.Build());
+
+        h.GoTo(_ => (IState)new StateB());
+        var def = config.Build();
+
+        Assert.NotNull(def);
+        Assert.Single(def.GetEventHandlers(typeof(StateA), typeof(EventX)));
+    }
+
+    // ── Non-destructive Build ─────────────────────────────────────────────────
+
+    [Fact]
+    public void Build_IsNonDestructive_SecondBuildReflectsAddedHandlers()
+    {
+        var config = Define().In<StateA>().On<EventX>().GoTo(_ => (IState)new StateB());
+        var def1 = config.Build();
+
+        config.In<StateA>().On<EventY>().Stay();
+        var def2 = config.Build();
+
+        Assert.Empty(def1.GetEventHandlers(typeof(StateA), typeof(EventY)));
+        Assert.Single(def2.GetEventHandlers(typeof(StateA), typeof(EventY)));
     }
 
     // ── AND guard semantics ───────────────────────────────────────────────────

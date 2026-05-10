@@ -2,14 +2,35 @@ using K4os.Stateful.Runtime;
 
 namespace K4os.Stateful.Configuration;
 
-// Mutable accumulator for one In<TCurrentState>() context.
-// Delegates are stored already wrapped to base types; wrapping happens in StateConfigBuilder<TCS>.
-internal sealed class StateHandlerConfig<TContext, TState>
+// Mutable, shared source-of-truth for one state type's lifecycle and event handlers.
+// Owned by MachineConfigBuilder; StateConfigBuilder holds a reference, never a copy.
+internal sealed class StateHandlerConfig<TContext, TState, TEvent>
     where TState: class
+    where TEvent: class
 {
-    public Func<Activation<TContext, TState>, ValueTask>? OnEnter { get; set; }
-    public Func<Activation<TContext, TState>, ValueTask>? OnExit { get; set; }
+    public int DeclarationOrder { get; }
+    public Func<Activation<TContext, TState>, ValueTask>? OnEnter { get; private set; }
+    public Func<Activation<TContext, TState>, ValueTask>? OnExit { get; private set; }
+    public List<EventHandlerConfig<TContext, TState, TEvent>> EventHandlers { get; } = [];
 
-    public StateHandler<TContext, TState> ToFrozen(Type stateType, int declarationOrder) =>
-        new(stateType, declarationOrder, OnEnter, OnExit);
+    public StateHandlerConfig(int declarationOrder)
+    {
+        DeclarationOrder = declarationOrder;
+    }
+
+    public void AddOnEnter(Func<Activation<TContext, TState>, ValueTask> wrapped)
+    {
+        var prev = OnEnter;
+        OnEnter = prev is null
+            ? wrapped
+            : async x => { await prev(x); await wrapped(x); };
+    }
+
+    public void AddOnExit(Func<Activation<TContext, TState>, ValueTask> wrapped)
+    {
+        var prev = OnExit;
+        OnExit = prev is null
+            ? wrapped
+            : async x => { await prev(x); await wrapped(x); };
+    }
 }

@@ -6,18 +6,18 @@ public partial class StateMachineConfig<TContext, TState, TEvent>
 {
     private sealed class MachineConfigBuilder: IMachineConfig
     {
-        private readonly List<EventHandler<TContext, TState, TEvent>> _eventHandlers = [];
-        private readonly List<StateHandler<TContext, TState>> _stateHandlers = [];
+        private readonly Dictionary<Type, StateHandlerConfig<TContext, TState, TEvent>> _stateConfigs = [];
         private int _order;
         private Func<TState, TState, bool>? _stateChangePredicate;
 
         internal int NextOrder() => _order++;
 
-        internal void AddEventHandler(EventHandler<TContext, TState, TEvent> handler) =>
-            _eventHandlers.Add(handler);
-
-        internal void AddStateHandler(StateHandler<TContext, TState> handler) =>
-            _stateHandlers.Add(handler);
+        internal StateHandlerConfig<TContext, TState, TEvent> GetOrCreateStateConfig(Type stateType)
+        {
+            if (!_stateConfigs.TryGetValue(stateType, out var config))
+                _stateConfigs[stateType] = config = new StateHandlerConfig<TContext, TState, TEvent>(_order++);
+            return config;
+        }
 
         public IMachineConfig WithStateChangeIf(Func<TState, TState, bool> predicate)
         {
@@ -29,8 +29,29 @@ public partial class StateMachineConfig<TContext, TState, TEvent>
             where TCurrentState: class, TState =>
             new StateConfigBuilder<TCurrentState>(this);
 
-        public MachineDefinition<TContext, TState, TEvent> Build() =>
-            new(_eventHandlers, _stateHandlers, _stateChangePredicate ?? DefaultPredicate);
+        public MachineDefinition<TContext, TState, TEvent> Build()
+        {
+            foreach (var (stateType, stateConfig) in _stateConfigs)
+                foreach (var eventConfig in stateConfig.EventHandlers)
+                    if (!eventConfig.IsComplete)
+                        throw new IncompleteEventHandlerException(stateType, eventConfig.EventType!);
+
+            var stateHandlers = new List<StateHandler<TContext, TState>>();
+            var eventHandlers = new List<EventHandler<TContext, TState, TEvent>>();
+
+            foreach (var (stateType, stateConfig) in _stateConfigs)
+            {
+                if (stateConfig.OnEnter is not null || stateConfig.OnExit is not null)
+                    stateHandlers.Add(new StateHandler<TContext, TState>(
+                        stateType, stateConfig.DeclarationOrder, stateConfig.OnEnter, stateConfig.OnExit));
+
+                foreach (var eventConfig in stateConfig.EventHandlers)
+                    eventHandlers.Add(eventConfig.ToFrozen());
+            }
+
+            return new MachineDefinition<TContext, TState, TEvent>(
+                eventHandlers, stateHandlers, _stateChangePredicate ?? DefaultPredicate);
+        }
 
         private static bool DefaultPredicate(TState s1, TState s2) => !ReferenceEquals(s1, s2);
     }

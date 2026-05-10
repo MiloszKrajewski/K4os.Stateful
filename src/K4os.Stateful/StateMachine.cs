@@ -4,7 +4,7 @@ namespace K4os.Stateful;
 
 public static class StateMachine
 {
-    public static StateMachineConfig<TContext, TState, TEvent>.IMachineConfig Define<TContext, TState, TEvent>()
+    public static StateMachineConfig<TContext, TState, TEvent>.IMachineConfig Configure<TContext, TState, TEvent>()
         where TState: class
         where TEvent: class =>
         StateMachineConfig<TContext, TState, TEvent>.CreateBuilder();
