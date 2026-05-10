@@ -44,4 +44,11 @@ internal static class Extensions
     [MethodImpl(MethodImplOptions.NoInlining), DoesNotReturn]
     private static T ThrowNullArgumentException<T>(string? expressionText) =>
         throw new ArgumentNullException(expressionText);
+
+    public static IEnumerable<T> InReverse<T>(this IReadOnlyList<T> source)
+    {
+        for (var i = source.Count - 1; i >= 0; i--)
+            yield return source[i];
+    }
+        
 }

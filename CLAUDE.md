@@ -63,14 +63,15 @@ var definition = StateMachine<Ctx, IState, IEvent>.Define()
 
 ### DSL interfaces (nested in `StateMachine<,,>`)
 
-- `IMachineConfig` — `.In<T>()`, `.Build()`
+- `IMachineConfig` — `.WithStateChangeIf(pred)`, `.In<T>()`, `.Build()`
 - `IStateConfig<TCurrentState>` — `.OnEnter(...)`, `.OnExit(...)`, `.On<TEvent>()`, `.In<T>()`, `.Build()`
 - `IEventConfig<TCurrentState, TCurrentEvent>` — `.When(...)`, `.GoTo(...)`, `.Stay(...)`
 
 All callbacks have three overloads: `Func<…, ValueTask>`, `Func<…, Task>`, and `Action<…>`.  
 `.When(...)` calls accumulate as AND logic (all guards must pass).  
 `.GoTo(...)` accepts sync or async functions returning `TState`.  
-`.Stay(...)` stays in the same state without triggering `OnExit`/`OnEnter`.
+`.Stay(...)` stays in the same state without triggering `OnExit`/`OnEnter`.  
+`.WithStateChangeIf(pred)` sets a custom `Func<TState, TState, bool>` predicate (default: `!ReferenceEquals`); last call wins.
 
 ### Context objects
 
@@ -94,6 +95,38 @@ State handlers for `OnEnter`/`OnExit` are sorted ascending by distance (most-der
 
 `DistanceFrom(Type parent)` — cached in a static `ConcurrentDictionary`. Walks the class chain for parent classes; for interfaces, finds the class in the chain that first introduces the interface via set-difference. Interface-to-interface distance is not implemented.
 
+### Execution
+
+`definition.Create(context, state)` returns a new `MachineExecutor<TContext, TState, TEvent>`. The executor holds its own mutable state; multiple executors can share the same frozen `MachineDefinition`.
+
+```csharp
+var executor = definition.Create(ctx, new IdleState());
+await executor.FireAsync(new StartEvent());
+bool matched = await executor.TryFireAsync(new UnknownEvent());
+executor.State; // current state after transitions
+```
+
+`MachineExecutor` public API:
+
+- `State` — current state (read-only)
+- `FireAsync(event, ct)` — fires a transition; throws `UnhandledEventException` on no match
+- `TryFireAsync(event, ct)` — same but returns `false` on no match instead of throwing
+- `Fire` / `TryFire` — synchronous wrappers via `.GetAwaiter().GetResult()`
+
+Transition pipeline inside `FireAsync`:
+1. `Interlocked.CompareExchange` sets in-flight flag — throws `ConcurrentFireException` if already set
+2. Ranked handlers for `(currentState.GetType(), event.GetType())` are retrieved from cache
+3. Guards evaluated in order; first passing handler is selected (short-circuit)
+4. Handler action invoked → `nextState`
+5. State-change predicate evaluated: if true, `OnExit` fires (derived→base), `_state` updated, `OnEnter` fires (base→derived); if false, `_state` updated silently
+6. In-flight flag cleared in `finally`
+
+Exceptions from any step propagate immediately. `_state` is only written after the action succeeds, so a throwing action leaves state unchanged.
+
+**Domain exceptions** (both inherit `Exception` directly):
+- `UnhandledEventException` — carries `.Event` and `.StateType`
+- `ConcurrentFireException` — signals re-entrant fire on same executor
+
 ### MachineDefinition caching
 
 `MachineDefinition` holds two `ConcurrentDictionary` caches that start empty and populate lazily on first executor use:
@@ -104,7 +137,7 @@ State handlers for `OnEnter`/`OnExit` are sorted ascending by distance (most-der
 ### Folder layout (`src/K4os.Stateful/`)
 
 - `Configuration/` — DSL builder classes: `StateMachine.Interfaces.cs`, `MachineConfigBuilder`, `StateConfigBuilder`, `EventConfigBuilder`, `StateHandlerConfig`, `EventHandlerConfig`
-- `Runtime/` — execution-time classes: `MachineDefinition`, `EventHandler`, `StateHandler`, `Activation`, `EventHandlerRanker`, `TypeExtensions`
+- `Runtime/` — execution-time classes: `MachineDefinition`, `MachineExecutor`, `EventHandler`, `StateHandler`, `Activation`, `EventHandlerRanker`, `TypeExtensions`, `UnhandledEventException`, `ConcurrentFireException`
 - `Internal/` — shared utilities (`Extensions.cs`)
 - `StateMachineConfig.cs` — `StateMachine<,,>` entry point (`.Define()`)
 
@@ -167,3 +200,4 @@ Internal utilities: `EventKey.cs` (dict key struct), `CollectionExtender.cs` (`T
 - `EventHandlerRankerTests.cs` — ranking algorithm: hierarchy precedence, class vs interface priority
 - `ActivationTests.cs` — `Activation` type conversion helpers
 - `MachineDefinitionTests.cs` — cache behavior
+- `ExecutorTests.cs` — executor lifecycle, entry/exit ordering, state-change predicate, guard walk, unhandled events, concurrent fire detection

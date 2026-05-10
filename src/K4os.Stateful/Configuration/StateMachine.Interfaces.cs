@@ -10,6 +10,7 @@ public partial class StateMachineConfig<TContext, TState, TEvent>
     
     public interface IMachineConfig
     {
+        IMachineConfig WithStateChangeIf(Func<TState, TState, bool> predicate);
         IStateConfig<TCurrentState> In<TCurrentState>() where TCurrentState: class, TState;
         MachineDefinition<TContext, TState, TEvent> Build();
     }

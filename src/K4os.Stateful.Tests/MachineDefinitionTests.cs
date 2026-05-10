@@ -19,7 +19,7 @@ public class MachineDefinitionTests
 
     private static MachineDefinition<Ctx, State, Event> Definition(
         params EventHandler<Ctx, State, Event>[] handlers) =>
-        new(handlers, []);
+        new(handlers, [], static (a, b) => !ReferenceEquals(a, b));
 
     [Fact]
     public void GetRankedHandlers_ReturnsCorrectRankedOrder()
