@@ -11,6 +11,7 @@ internal sealed class StateHandlerConfig<TContext, TState, TEvent>
     public int DeclarationOrder { get; }
     public Func<Activation<TContext, TState>, ValueTask>? OnEnter { get; private set; }
     public Func<Activation<TContext, TState>, ValueTask>? OnExit { get; private set; }
+    public Func<Activation<TContext, TState>, ValueTask<TState>>? AutoHandler { get; private set; }
     public List<EventHandlerConfig<TContext, TState, TEvent>> EventHandlers { get; } = [];
 
     public StateHandlerConfig(int declarationOrder)
@@ -32,5 +33,10 @@ internal sealed class StateHandlerConfig<TContext, TState, TEvent>
         OnExit = prev is null
             ? wrapped
             : async x => { await prev(x); await wrapped(x); };
+    }
+
+    public void SetAutoHandler(Func<Activation<TContext, TState>, ValueTask<TState>> handler)
+    {
+        AutoHandler = handler;
     }
 }

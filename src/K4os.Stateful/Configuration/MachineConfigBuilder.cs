@@ -41,9 +41,9 @@ public partial class StateMachineConfig<TContext, TState, TEvent>
 
             foreach (var (stateType, stateConfig) in _stateConfigs)
             {
-                if (stateConfig.OnEnter is not null || stateConfig.OnExit is not null)
+                if (stateConfig.OnEnter is not null || stateConfig.OnExit is not null || stateConfig.AutoHandler is not null)
                     stateHandlers.Add(new StateHandler<TContext, TState>(
-                        stateType, stateConfig.DeclarationOrder, stateConfig.OnEnter, stateConfig.OnExit));
+                        stateType, stateConfig.DeclarationOrder, stateConfig.OnEnter, stateConfig.OnExit, stateConfig.AutoHandler));
 
                 foreach (var eventConfig in stateConfig.EventHandlers)
                     eventHandlers.Add(eventConfig.ToFrozen());

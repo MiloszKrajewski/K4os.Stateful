@@ -30,6 +30,12 @@ public partial class StateMachineConfig<TContext, TState, TEvent>
             return this;
         }
 
+        public IMachineConfig Auto(Func<Activation<TContext, TCurrentState>, ValueTask<TState>> handler)
+        {
+            _config.SetAutoHandler(async x => await handler(x.Convert<TCurrentState>()));
+            return _machine;
+        }
+
         public IEventConfig<TCurrentState, TCurrentEvent> On<TCurrentEvent>()
             where TCurrentEvent: class, TEvent =>
             new EventConfigBuilder<TCurrentState, TCurrentEvent>(this, _config, _machine);

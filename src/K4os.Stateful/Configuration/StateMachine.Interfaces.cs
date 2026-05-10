@@ -39,6 +39,17 @@ public partial class StateMachineConfig<TContext, TState, TEvent>
                 return ValueTask.CompletedTask;
             });
 
+        IMachineConfig Auto(
+            Func<Activation<TContext, TCurrentState>, ValueTask<TState>> handler);
+
+        IMachineConfig Auto(
+            Func<Activation<TContext, TCurrentState>, Task<TState>> handler) =>
+            Auto(x => new ValueTask<TState>(handler(x)));
+
+        IMachineConfig Auto(
+            Func<Activation<TContext, TCurrentState>, TState> handler) =>
+            Auto(x => new ValueTask<TState>(handler(x)));
+
         IEventConfig<TCurrentState, TCurrentEvent> On<TCurrentEvent>() where TCurrentEvent: class, TEvent;
         IStateConfig<TNextState> In<TNextState>() where TNextState: class, TState;
         MachineDefinition<TContext, TState, TEvent> Build();

@@ -13,6 +13,7 @@ public class ExecutorTests
     private interface IState;
     private class StateA : IState;
     private class StateB : IState;
+    private class StateC : IState;
     private class StateDerived : StateA;
 
     private interface IEvent;
@@ -600,5 +601,199 @@ public class ExecutorTests
             .Build();
 
         Assert.NotNull(def);
+    }
+
+    // ── 14.x Auto Transitions ─────────────────────────────────────────────────
+
+    [Fact]
+    public void Create_DoesNotTriggerAuto_PositionsAtInitialState()
+    {
+        var autoCalled = false;
+        var def = Config()
+            .In<StateA>().Auto(_ => { autoCalled = true; return ValueTask.FromResult<IState>(new StateB()); })
+            .Build();
+
+        var executor = def.Create(new Ctx(), new StateA());
+
+        Assert.False(autoCalled);
+        Assert.IsType<StateA>(executor.State);
+    }
+
+    [Fact]
+    public async Task IdleAsync_IsNoOp_WhenCurrentStateHasNoAuto()
+    {
+        var log = new List<string>();
+        var executor = Build(c => c
+            .In<StateA>().OnEnter(_ => log.Add("enter-A"))
+            .In<StateA>().On<EventA>().Stay());
+
+        await executor.FireAsync(new EventA());
+        log.Clear();
+
+        await executor.IdleAsync();
+
+        Assert.Empty(log);
+        Assert.IsType<StateA>(executor.State);
+    }
+
+    [Fact]
+    public async Task Auto_FiresAfterOnEnter_BeforeFireAsyncReturns()
+    {
+        var log = new List<string>();
+        var executor = Build(c => c
+            .In<StateA>().On<EventA>().GoTo(_ => new StateB())
+            .In<StateB>()
+                .OnEnter(_ => { log.Add("OnEnter-B"); })
+                .Auto(_ => { log.Add("Auto-B"); return ValueTask.FromResult<IState>(new StateA()); }));
+
+        await executor.FireAsync(new EventA());
+
+        Assert.Equal(2, log.Count);
+        Assert.Equal("OnEnter-B", log[0]);
+        Assert.Equal("Auto-B", log[1]);
+        Assert.IsType<StateA>(executor.State);
+    }
+
+    [Fact]
+    public async Task Auto_ReturningSameReference_IsNoOp()
+    {
+        var autoCalled = 0;
+        var enterCount = 0;
+        var executor = Build(c => c
+            .In<StateA>().On<EventA>().GoTo(_ => new StateB())
+            .In<StateB>()
+                .OnEnter(_ => { enterCount++; })
+                .Auto(x => { autoCalled++; return ValueTask.FromResult<IState>(x.State); }));
+
+        await executor.FireAsync(new EventA());
+
+        Assert.Equal(1, autoCalled);
+        Assert.Equal(1, enterCount);
+        Assert.IsType<StateB>(executor.State);
+    }
+
+    [Fact]
+    public async Task Auto_TriggeringTransition_FiresFullLifecycle()
+    {
+        var log = new List<string>();
+        var executor = Build(c => c
+            .In<StateA>().On<EventA>().GoTo(_ => new StateB())
+            .In<StateB>()
+                .OnEnter(_ => { log.Add("OnEnter-B"); })
+                .OnExit(_ => { log.Add("OnExit-B"); })
+                .Auto(_ => ValueTask.FromResult<IState>(new StateA()))
+            .In<StateA>()
+                .OnEnter(_ => { log.Add("OnEnter-A"); }));
+
+        await executor.FireAsync(new EventA());
+
+        Assert.Equal(["OnEnter-B", "OnExit-B", "OnEnter-A"], log);
+        Assert.IsType<StateA>(executor.State);
+    }
+
+    [Fact]
+    public async Task Auto_Chain_AllIntermediateLifecycleFires()
+    {
+        var log = new List<string>();
+        var executor = Build(c => c
+            .In<StateA>().On<EventA>().GoTo(_ => new StateB())
+            .In<StateB>()
+                .OnEnter(_ => { log.Add("OnEnter-B"); })
+                .Auto(_ => ValueTask.FromResult<IState>(new StateC()))
+            .In<StateC>()
+                .OnEnter(_ => { log.Add("OnEnter-C"); })
+                .Auto(_ => ValueTask.FromResult<IState>(new StateA()))
+            .In<StateA>()
+                .OnEnter(_ => { log.Add("OnEnter-A"); }));
+
+        await executor.FireAsync(new EventA());
+
+        Assert.Equal(["OnEnter-B", "OnEnter-C", "OnEnter-A"], log);
+        Assert.IsType<StateA>(executor.State);
+    }
+
+    [Fact]
+    public async Task Auto_FinalState_WithNoAuto_TerminatesCleanly()
+    {
+        var executor = Build(c => c
+            .In<StateA>().On<EventA>().GoTo(_ => new StateB())
+            .In<StateB>().Auto(_ => ValueTask.FromResult<IState>(new StateC())));
+
+        await executor.FireAsync(new EventA());
+
+        Assert.IsType<StateC>(executor.State);
+    }
+
+    [Fact]
+    public async Task Auto_Exception_LeavesStateAtLastEnteredState()
+    {
+        var executor = Build(c => c
+            .In<StateA>().On<EventA>().GoTo(_ => new StateB())
+            .In<StateB>().Auto(_ => Throw(new InvalidOperationException("boom"))));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            executor.FireAsync(new EventA()).AsTask());
+
+        Assert.IsType<StateB>(executor.State);
+    }
+
+    [Fact]
+    public async Task Auto_IdleAsync_ResumesAfterStuckAutoState()
+    {
+        var attempt = 0;
+        var executor = Build(c => c
+            .In<StateA>().On<EventA>().GoTo(_ => new StateB())
+            .In<StateB>().Auto(x => {
+                if (++attempt == 1) throw new InvalidOperationException("transient");
+                return ValueTask.FromResult<IState>(new StateC());
+            }));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            executor.FireAsync(new EventA()).AsTask());
+        Assert.IsType<StateB>(executor.State);
+
+        await executor.IdleAsync();
+
+        Assert.IsType<StateC>(executor.State);
+    }
+
+    [Fact]
+    public async Task Auto_FireAsync_SettlesStuckAutoStateBeforeDispatching()
+    {
+        var attempt = 0;
+        var executor = Build(c => c
+            .In<StateA>().On<EventA>().GoTo(_ => new StateB())
+            .In<StateB>().Auto(x => {
+                if (++attempt == 1) throw new InvalidOperationException("transient");
+                return ValueTask.FromResult<IState>(new StateC());
+            })
+            .In<StateC>().On<EventB>().GoTo(_ => new StateA()));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            executor.FireAsync(new EventA()).AsTask());
+        Assert.IsType<StateB>(executor.State);
+
+        await executor.FireAsync(new EventB());
+
+        Assert.IsType<StateA>(executor.State);
+    }
+
+    [Fact]
+    public async Task Auto_CancellationToken_FlowsThrough()
+    {
+        using var cts = new CancellationTokenSource();
+        CancellationToken captured = default;
+
+        var executor = Build(c => c
+            .In<StateA>().On<EventA>().GoTo(_ => new StateB())
+            .In<StateB>().Auto(x =>
+            {
+                captured = x.CancellationToken;
+                return ValueTask.FromResult<IState>(x.State);
+            }));
+
+        await executor.TryFireAsync(new EventA(), cts.Token);
+
+        Assert.Equal(cts.Token, captured);
     }
 }

@@ -34,7 +34,7 @@ public sealed class MachineDefinition<TContext, TState, TEvent>
 
     internal bool StateChanged(TState previous, TState next) => _stateChangePredicate(previous, next);
 
-    public MachineExecutor<TContext, TState, TEvent> Create(TContext context, TState state) => 
+    public MachineExecutor<TContext, TState, TEvent> Create(TContext context, TState state) =>
         new(this, context, state);
 
     internal EventHandler<TContext, TState, TEvent>[] GetEventHandlers(

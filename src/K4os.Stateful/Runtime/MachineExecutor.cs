@@ -22,11 +22,52 @@ public sealed class MachineExecutor<TContext, TState, TEvent>
 
     public TState State => _state;
 
-    public async ValueTask FireAsync(TEvent @event, CancellationToken cancellationToken = default) =>
-        await TryFireCoreAsync(@event, true, cancellationToken: cancellationToken);
+    public async ValueTask FireAsync(TEvent @event, CancellationToken cancellationToken = default)
+    {
+        if (Interlocked.CompareExchange(ref _firing, 1, 0) != 0)
+            throw new ConcurrentFireException();
+        try
+        {
+            await RunAutoChainAsync(cancellationToken);
+            await TryFireCoreAsync(@event, true, cancellationToken);
+            await RunAutoChainAsync(cancellationToken);
+        }
+        finally
+        {
+            Volatile.Write(ref _firing, 0);
+        }
+    }
 
-    public ValueTask<bool> TryFireAsync(TEvent @event, CancellationToken cancellationToken = default) =>
-        TryFireCoreAsync(@event, false, cancellationToken: cancellationToken);
+    public async ValueTask<bool> TryFireAsync(TEvent @event, CancellationToken cancellationToken = default)
+    {
+        if (Interlocked.CompareExchange(ref _firing, 1, 0) != 0)
+            throw new ConcurrentFireException();
+        try
+        {
+            await RunAutoChainAsync(cancellationToken);
+            if (!await TryFireCoreAsync(@event, false, cancellationToken)) return false;
+            await RunAutoChainAsync(cancellationToken);
+            return true;
+        }
+        finally
+        {
+            Volatile.Write(ref _firing, 0);
+        }
+    }
+
+    public async ValueTask IdleAsync(CancellationToken cancellationToken = default)
+    {
+        if (Interlocked.CompareExchange(ref _firing, 1, 0) != 0)
+            throw new ConcurrentFireException();
+        try
+        {
+            await RunAutoChainAsync(cancellationToken);
+        }
+        finally
+        {
+            Volatile.Write(ref _firing, 0);
+        }
+    }
 
     public void Fire(TEvent @event, CancellationToken cancellationToken = default) =>
         FireAsync(@event, cancellationToken).GetAwaiter().GetResult();
@@ -34,31 +75,46 @@ public sealed class MachineExecutor<TContext, TState, TEvent>
     public bool TryFire(TEvent @event, CancellationToken cancellationToken = default) =>
         TryFireAsync(@event, cancellationToken).GetAwaiter().GetResult();
 
+    public void Idle(CancellationToken cancellationToken = default) =>
+        IdleAsync(cancellationToken).GetAwaiter().GetResult();
+
     private async ValueTask<bool> TryFireCoreAsync(
         TEvent @event, bool throwOnNoMatch, CancellationToken cancellationToken)
     {
-        if (Interlocked.CompareExchange(ref _firing, 1, 0) != 0)
-            throw new ConcurrentFireException();
+        var thisState = _state;
+        var activation = Activation.Create(_context, thisState, @event, cancellationToken);
+        var handler = await FindMatchingHandler(activation, throwOnNoMatch);
+        if (handler is null) return false;
 
-        try
+        var nextState = await handler.Action(activation);
+        var stateChanged = _definition.StateChanged(thisState, nextState);
+
+        if (stateChanged) await OnExit(thisState, cancellationToken);
+        _state = nextState;
+        if (!stateChanged) return true;
+
+        await OnEnter(nextState, cancellationToken);
+        return true;
+    }
+
+    private async ValueTask RunAutoChainAsync(CancellationToken ct)
+    {
+        while (true)
         {
-            var thisState = _state;
-            var activation = Activation.Create(_context, thisState, @event, cancellationToken);
-            var handler = await FindMatchingHandler(activation, throwOnNoMatch);
-            if (handler is null) return false;
+            var state = _state;
+            var stateHandlers = _definition.GetStateHandlers(state.GetType());
+            var autoHandler = stateHandlers.FirstOrDefault(h => h.Auto is not null);
+            if (autoHandler?.Auto is null) break;
 
-            var nextState = await handler.Action(activation);
-            var stateChanged = _definition.StateChanged(thisState, nextState);
+            var activation = Activation.Create(_context, state, ct);
+            var nextState = await autoHandler.Auto(activation);
 
-            if (stateChanged) await OnExit(thisState, cancellationToken);
+            var stateChanged = _definition.StateChanged(state, nextState);
+            if (stateChanged) await OnExit(state, ct);
             _state = nextState;
-            if (stateChanged) await OnEnter(nextState, cancellationToken);
+            if (!stateChanged) break;
 
-            return true;
-        }
-        finally
-        {
-            Volatile.Write(ref _firing, 0);
+            await OnEnter(nextState, ct);
         }
     }
 

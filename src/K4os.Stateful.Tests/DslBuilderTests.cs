@@ -361,6 +361,39 @@ public class DslBuilderTests
         Assert.False(await handlers[0].Guard!(activation));
     }
 
+    // ── Auto handler registration ─────────────────────────────────────────────
+
+    [Fact]
+    public void Auto_RegistersStateHandler_WithAutoDelegate()
+    {
+        var def = Define()
+            .In<StateA>().Auto(_ => ValueTask.FromResult<IState>(new StateB()))
+            .Build();
+
+        var handlers = def.GetStateHandlers(typeof(StateA));
+
+        Assert.Single(handlers);
+        Assert.NotNull(handlers[0].Auto);
+    }
+
+    [Fact]
+    public async Task Auto_LastCallWins_WhenCalledTwiceOnSameState()
+    {
+        // .Auto() returns IMachineConfig, so two calls require disconnected style
+        var config = Define();
+        config.In<StateA>().Auto(_ => ValueTask.FromResult<IState>(new StateB()));   // first — should be overwritten
+        config.In<StateA>().Auto(_ => ValueTask.FromResult<IState>(new StateA()));   // last — should win
+        var def = config.Build();
+
+        var handlers = def.GetStateHandlers(typeof(StateA));
+        Assert.Single(handlers);
+
+        var activation = new Activation<Ctx, IState>(new Ctx(), new StateA(), CancellationToken.None);
+        var result = await handlers[0].Auto!(activation);
+
+        Assert.IsType<StateA>(result);  // Second Auto (→StateA) won, not first (→StateB)
+    }
+
     // ── Build immutability ────────────────────────────────────────────────────
 
     [Fact]
