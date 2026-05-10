@@ -1,262 +1,226 @@
-Stateful
+K4os.Stateful
 ===
-**State Machine Construction Kit for .NET**
+**Typed, async-native state machine library for .NET**
 
-Why yet another state machine library?
----
+## Why
 
-I looked at several other state machine implementations:
+Most .NET state machine libraries model state as an enum — a label with no data. This forces actual state data to live outside the machine, defeating the point of structured state management.
 
-* [Windows Workflow Foundation](http://msdn.microsoft.com/en-gb/vstudio/jj684582.aspx) (of course)
-* [Appccelerate.StateMachine](https://github.com/appccelerate/statemachine)
-* [bbv.Common.StateMachine](https://code.google.com/p/bbvcommon/wiki/StateMachineTutorial)
-* [Stateless](https://github.com/nblumhardt/stateless)
-* [SimpleStateMachine](http://simplestatemachine.codeplex.com)
-* [Solid.State](https://code.google.com/p/solid-state)
-* [StateMachineToolkit](https://github.com/OmerMor/StateMachineToolkit/tree/master/src/StateMachineToolkit)
+K4os.Stateful treats state and events as **plain .NET objects**:
 
-Unfortunately, none of them satisfied my needs. My requirements were:
+- State is a typed record/class that carries data
+- Events carry typed payloads — no boxing
+- Transitions are async-native (`ValueTask`)
+- Handlers match polymorphically via class inheritance — a handler on `Animal` fires for `Dog : Animal`
+- Side effects go through an injected **context** object; the library has no output channel
 
-* **Events should be able to carry data** - for example, hypothetical event `KeyPressed` should also carry information which key has been pressed;
-* **States should be able hold data** - for example, state collecting key presses (let's call it `EnteringText`) should be able to hold a list of keys pressed so far;
-* **Guard statements should have access to both current state and event** - for example, `KeyPressed` event may cause transition to different state depending which key has been pressed;
+## Quick start
 
-Windows Workflow Foundation is just scary, apart from the fact that State Machine is just not available in .NET 4.0.           
+```csharp
+// States
+interface IDoorState { }
+record ClosedState(bool IsLocked) : IDoorState;
+record OpenState : IDoorState;
 
-Stateful has been inspired by [Stateless](https://github.com/nblumhardt/stateless). Actually, I would most likely settle with [Stateless](https://github.com/nblumhardt/stateless) if it was passing event arguments to `.If(...)` predicate.
+// Events
+interface IDoorEvent { }
+record OpenEvent : IDoorEvent;
+record CloseEvent : IDoorEvent;
+record LockEvent : IDoorEvent;
+record UnlockEvent : IDoorEvent;
 
-Because it wasn't, I decided I would like to have a State Machine with slightly different approach. 
+// Context — injected services
+class DoorContext
+{
+    public ILogger Logger { get; init; } = null!;
+}
 
-StateMachine
----
-`StateMachine` is actually a wrapper class for both `IConfigurator` and `IExecutor` providing data types for: Context (your data), State (base class for all the states) and Event (base class for all events).
+// Configure once — frozen, thread-safe definition
+var definition = StateMachine.Configure<DoorContext, IDoorState, IDoorEvent>()
+    .In<ClosedState>()
+        .On<OpenEvent>()
+            .When(x => !x.State.IsLocked)
+            .GoTo(x => new OpenState())
+        .On<LockEvent>()
+            .When(x => !x.State.IsLocked)
+            .GoTo(x => x.State with { IsLocked = true })
+        .On<UnlockEvent>()
+            .When(x => x.State.IsLocked)
+            .GoTo(x => x.State with { IsLocked = false })
+    .In<OpenState>()
+        .On<CloseEvent>()
+            .GoTo(x => new ClosedState(IsLocked: false))
+    .Build();
 
-Interface:
+// Create one executor per entity — shares the frozen definition
+var executor = definition.Create(new DoorContext { Logger = logger }, new ClosedState(false));
 
-	public static class StateMachine<TContext, TState, TEvent>
-	{
-		IConfigurator NewConfigurator();
-	} 
+await executor.FireAsync(new LockEvent());
+await executor.FireAsync(new OpenEvent());    // throws UnhandledEventException (locked)
 
-Example:
+bool ok = await executor.TryFireAsync(new OpenEvent());  // returns false instead of throwing
+```
 
-	var configurator = StateMachine<Context, State, Event>.NewConfigurator();   
+## Concepts
 
-StateMachine.IConfigurator
----
-`IConfigurator` is an interface used to configure states and events. It has two methods: `In<TActualState>()` and `On<TActualState, TActualEvent>()`. `In` is used to configure state, while `On` is used to configure event.
+### States and events are objects
 
-Interface:
+States and events are plain C# records or classes. They carry data as properties. No enums, no string labels.
 
-	public static class StateMachine<TContext, TState, TEvent>
-	{
-		public interface IConfigurator
-		{
-			IStateConfigurator<TActualState> In<TActualState>()
-				where TActualState: TState;
-	
-			IEventConfigurator<TActualState, TActualEvent> On<TActualState, TActualEvent>()
-				where TActualState: TState
-				where TActualEvent: TEvent;
-		}
-	}
+```csharp
+record IdleState : IState;
+record ProcessingState(string JobId, int Retries) : IState;
+record DoneState(string Result) : IState;
+```
 
-Example:
+Transitions can return a **different type** — discriminated-union style:
 
-	var configurator = StateMachine<Context, State, Event>.NewConfigurator();   
-	configurator.In<State1>()
-		.OnEnter(c => Console.WriteLine("entering State1"))
-		.OnExit(c => Console.WriteLine("exiting State1"));
-	configure.On<State1, Event1>()
-		.OnTrigger(c => Console.WriteLine("received Event1 in State1"))
-		.Goto(c => new State2());
+```csharp
+.GoTo(x => new DoneState(result))  // cross-type transition: ProcessingState → DoneState
+```
 
-StateMachine.IStateConfigurator
----
-Allows to configure state with `OnEnter`, `OnExit` and `On<TActualEvent>` handlers.
-   
-Interface:
+### Context
 
-	public static class StateMachine<TContext, TState, TEvent>
-	{
-		public interface IStateConfigurator<out TActualState>
-			where TActualState: TState
-		{
-			IStateConfigurator<TActualState> OnEnter(
-				Action<IStateContext<TActualState>> context);
-			IStateConfigurator<TActualState> OnExit(
-				Action<IStateContext<TActualState>> context);
-			IEventConfigurator<TActualState, TActualEvent> On<TActualEvent>()
-				where TActualEvent: TEvent;
-		}
-	}
+Context is a shared object injected once per executor — your integration point with the outer world (logger, message bus, database, etc.). The library never inspects it.
 
-Example:
+```csharp
+.GoTo(async x =>
+{
+    await x.Context.Bus.Publish(new JobCompleted(x.State.JobId), x.CancellationToken);
+    return new DoneState(result);
+})
+```
 
-	var configurator = StateMachine<Context, State, Event>.NewConfigurator();
-	
-	// note: both constructs below do the same thing
-	configurator.In<State1>().On<Event1>().Goto(c => new State2());
-	configurator.On<State1, Event1>().Goto(c => new State2());
+### Hierarchical matching
 
-StateMachine.IEventConfigurator
----
-Allows to configure event. Use `When` to filter events, and `OnTrigger` to execute any code when event is triggered. `Goto` is used to make transition to another state, while `Loop` is used to stay in the same state without triggering state handlers. For example, after both `.Goto(c => c.State)` and `.Loop()` state machine will stay in the same state the `.Goto(...)` transition will trigger both `OnExit` and `OnEnter` handlers (in this order).
+Handlers match by inheritance distance. The most-derived match wins:
 
-Interface:
+```csharp
+c.In<IDoorState>().On<IDoorEvent>()   // distance > 0 — catch-all fallback
+    .Stay(x => x.Context.Logger.LogDebug("unhandled {E}", x.Event));
 
-	public static class StateMachine<TContext, TState, TEvent>
-	{
-		public interface IEventConfigurator<out TActualState, out TActualEvent>
-			where TActualState: TState
-			where TActualEvent: TEvent
-		{
-			IEventConfigurator<TActualState, TActualEvent> OnTrigger(
-				Action<IEventContext<TActualState, TActualEvent>> action);
-			IEventConfigurator<TActualState, TActualEvent> When(
-				Func<IEventContext<TActualState, TActualEvent>, bool> predicate);
-			IEventConfigurator<TActualState, TActualEvent> Goto(
-				Func<IEventContext<TActualState, TActualEvent>, TState> action);
-			IEventConfigurator<TActualState, TActualEvent> Loop();
-		}
-	}
+c.In<ClosedState>().On<OpenEvent>()   // distance 0 — takes priority over above
+    .GoTo(x => new OpenState());
+```
 
-Example:
+This works for both state and event types independently. A handler on `IState` fires for any concrete state; a handler on `IDoorEvent` fires for any door event.
 
-	var configurator = StateMachine<Context, State, Event>.NewConfigurator();
-	
-	configurator.In<State1>().On<Event1>()
-		.OnTrigger(c => Console.WriteLine("Triggered!"))
-		.When(c => c.Event.Sender.Name == "Mike")
-		.Goto(c => new State2("Got here because of Mike"));
+### Entry and exit hooks
 
-IStateContext and IEventContext
----
-Handlers in both State and Event definition (`OnEnter`, `OnExit`, `OnTrigger`, `When`, `Goto`) take `IStateContext` and `IEventContext` respectively.
+`OnEnter`/`OnExit` fire for **every type in the inheritance chain** that has a registered handler. Entry fires base → derived; exit fires derived → base.
 
-	public interface IStateContext<out TActualState>
-		where TActualState: TState
-	{
-		TContext Context { get; }
-		TActualState State { get; }
-	}
+```csharp
+c.In<IDoorState>()
+    .OnEnter(x => x.Context.Logger.LogDebug("entering a door state"));  // fires for all door states
 
-	public interface IEventContext<out TActualState, out TActualEvent>: 
-		IStateContext<TActualState>
-		where TActualState: TState
-		where TActualEvent: TEvent
-	{
-		TActualEvent Event { get; }
-	}
+c.In<ClosedState>()
+    .OnEnter(x => x.Context.Logger.LogDebug("entering closed"))   // fires after the above
+    .OnExit(x => x.Context.Logger.LogDebug("leaving closed"));
+```
 
-They allow to access Context, State and Event when trigger, for example:
+### Guard evaluation
 
-	configurator.In<State1>()
-		.OnEnter(c => Console.WriteLine(c.State.Name)); // c.State is State1 
+`.When(...)` filters handlers. Multiple `.When()` calls on the same handler combine with AND logic. The first handler whose guard passes fires; the rest are skipped. A handler with no `.When()` acts as an unguarded fallback.
 
-	configurator.In<State1>().On<Event1>()
-		.OnTrigger(c => Console.WriteLine("Triggered!"))
-		.When(c => c.Event.Sender.Name == "Mike") // c.Event is Event1
-		.Goto(c => new State2("Got here because of Mike"));
- 
+```csharp
+c.In<ClosedState>().On<OpenEvent>()
+    .When(x => !x.State.IsLocked)
+    .When(x => x.State.OpenCount < 100)   // AND with above
+    .GoTo(x => new OpenState())
+.On<OpenEvent>()                          // fallback (no When)
+    .Stay(x => x.Context.Logger.LogWarning("door cannot be opened"));
+```
 
-StateMachine.IExecutor
----
-Executor is the object allowing to walk through states or in other word execute state machine by feeding it with events.
+### State-change predicate
 
-Interface:
+Entry/exit hooks fire when the state-change predicate returns `true` for `(previousState, nextState)`. The default is `!ReferenceEquals` — so `.Stay()` (returns the same reference) suppresses hooks, while `GoTo(x => x.State with { })` (new record instance) triggers them.
 
-	public interface IExecutor
-	{
-		TContext Context { get; }
-		TState State { get; }
+```csharp
+StateMachine.Configure<Ctx, IState, IEvent>()
+    .WithStateChangeIf((s1, s2) => s1.GetType() != s2.GetType())  // fire only on type change
+    // ...
+```
 
-		void Fire(TEvent @event);
-	}
+### Executor lifecycle
 
-So, as you can see it allows to fire event, access state machine's context and current state. Usually, the loop used for execution would be something link this:
+One frozen `MachineDefinition` → many `MachineExecutor` instances (one per entity, session, etc.).
 
-	foreach (var e in eventStream)
-	{
-		if (executor.State is TerminalState)
-			break;
-		executor.Fire(e);
-	}
+```csharp
+// Fresh start
+var executor = definition.Create(context, new IdleState());
 
-Note, `TerminalState` is your terminal state, whatever is your terminal state. The events may be fed with `IEnumerable<TEvent>` (as in this example) or provided by `IObservable<TEvent>`. In some state machines it would be important to generate Idle-like event so I would suggest blocking queue with a loop like this:
+// Restore from persisted state — identical API
+var executor = definition.Create(context, JsonSerializer.Deserialize<IState>(saved)!);
+```
 
-	while (true)
-	{
-		if (executor.State is TerminalState)
-			break;
-		TEvent e;
-		var success = eventQueue.TryTake(out e, timeout);
-		executor.Fire(success ? e : new IdleEvent());
-	}   
+`Create` does **not** fire `OnEnter`. The executor is being positioned at a state, not transitioning into it.
 
-Hierarchical state machine
----
-Hierarchy comes naturally to this state machine as events and states are classes so you can use class hierarchy to build events. Let's say you have:
+### Serialization
 
-	class Event {}
-	class IdleEvent: Event {}
-	class SomeEvent: Event {}
+The library holds no non-serializable state. `executor.State` returns the raw state object; the caller owns persistence:
 
-	class State {}
-	class StateA: State {}
-	class StateB: State {}
-	class StateC: State {}
+```csharp
+string json = JsonSerializer.Serialize(executor.State);
+// later:
+var state = JsonSerializer.Deserialize<IState>(json)!;
+var executor = definition.Create(context, state);
+```
 
-configuring the state machine like this:
+## DSL reference
 
-	config.On<State, IdleEvent>()
-		.OnTrigger(c => Console.WriteLine("idle..."))
-		.Loop();
-	config.On<StateC, IdleEvent>()
-		.OnTrigger(c => Console.WriteLine("idle in C - going to A"))
-		.Goto(c => new StateA());
+### `IMachineConfig`
 
-will handle `IdleEvent` in all states the same way (by printing 'idle...' and staying in the same state), except for `StateC` where it will go to `StateA`.
-Definition "closer" in terms of inheritance distance takes precedence. The distance to interface is a little bit tricky so it is advised to not use interface for rule definition. It will work but results may be surprising sometimes.
-Let's imagine a class A which implements interface I and a class B which inherits from A. It is not possible to determine if B implements I on it's own (distance 1) or only because A implements it (distance 2). Stateful assumes longest inheritance path otherwise distance would be always 1.
+| Method | Description |
+|--------|-------------|
+| `.In<TState>()` | Open a state scope |
+| `.WithStateChangeIf(pred)` | Override the state-change predicate |
+| `.Build()` | Freeze and return `MachineDefinition<C,S,E>` |
 
-Notes on performance
----
-This is not the fastest state machine in the world. Approach of using classes for both states and events and allowing hierarchical definitions has its price. It tries to cache list of potential rules, so it does calculate "inheritance distance" only once per concrete type. There is still some reflection used though, so if you need very fast switching, fine grained state machine use something or roll your own. 
+### `IStateConfig<TState>`
 
-I would NOT recommend Stateful to implement you own Regular Expression engine. 
+| Method | Description |
+|--------|-------------|
+| `.OnEnter(callback)` | Register entry hook |
+| `.OnExit(callback)` | Register exit hook |
+| `.On<TEvent>()` | Open an event scope |
+| `.In<TState>()` | Pivot to a different state scope |
+| `.Build()` | Freeze the definition |
 
-Simple Calculator, working example
----
-Check unit tests for working example of simple calculator. With execution method shown below:
+### `IEventConfig<TState, TEvent>`
 
-	public int Execute(string expression)
-	{
-		var calculator = CreateCalculator();
+| Method | Description |
+|--------|-------------|
+| `.When(guard)` | Add a guard (AND-accumulated) |
+| `.GoTo(fn)` | Transition to a new state; returns state scope for chaining |
+| `.Stay()` | No state change; suppress entry/exit |
+| `.Stay(callback)` | No state change; run a side-effect callback |
 
-		foreach (var e in expression) // char-by-char
-		{
-			calculator.Fire(e);
-			if (calculator.State is Result)
-				break;
-		}
+All callbacks accept `ValueTask`, `Task`, or synchronous forms.
 
-		var result = calculator.State as Result;
-		if (result == null)
-			throw new ArgumentException("Expression ended prematurely");
+### Activation bundles
 
-		return result.Number;
-	}
+| Type | Available in | Properties |
+|------|-------------|------------|
+| `Activation<TContext, TState>` | `OnEnter`, `OnExit` | `.Context`, `.State`, `.CancellationToken` |
+| `Activation<TContext, TState, TEvent>` | `When`, `GoTo`, `Stay` | + `.Event` |
 
-I was able to evaluate some simple expressions:
+## Exceptions
 
-	[Test]
-	public void SomeExpressions()
-	{
-		Assert.AreEqual(123, Execute("123="));
-		Assert.AreEqual(123 + 546, Execute("123+546="));
-		Assert.AreEqual(-123 - 546, Execute("-123-546="));
-		Assert.AreEqual(-123 * -356, Execute("-123*-356="));
-	}
+| Exception | When |
+|-----------|------|
+| `UnhandledEventException` | `FireAsync` finds no matching handler |
+| `ConcurrentFireException` | `FireAsync` called while another fire is in progress |
+| `IncompleteEventHandlerException` | `Build()` called with an `.On<E>()` that has no `.GoTo()`/`.Stay()` |
 
-See `CalculatorTests.cs` for details.
+`TryFireAsync` returns `false` instead of throwing `UnhandledEventException`.
+
+## Handler priority
+
+When multiple handlers could match, the ranking is (ascending = higher priority):
+
+1. State type distance (most derived wins)
+2. Class over interface at same distance
+3. Event type distance (most derived wins)
+4. Class over interface at same distance
+5. Guarded before unguarded (`.When(...)` present)
+6. Declaration order (stable tie-break)

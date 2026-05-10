@@ -2,39 +2,37 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Build System
+## Build & Test
 
-Standard .NET SDK project targeting `net8.0`. Solution: `src/K4os.Stateful.sln`.
+Standard .NET SDK. Solution: `src/K4os.Stateful.sln`.
 
 ```
-dotnet build src/K4os.Stateful.sln          # Build
-dotnet test src/K4os.Stateful.sln           # Run all tests
-dotnet pack src/K4os.Stateful.sln           # Pack NuGet packages
+dotnet build src/K4os.Stateful.sln
+dotnet test src/K4os.Stateful.sln
+dotnet pack src/K4os.Stateful.sln
 ```
 
-To run a single test class or method:
+Single test class/method:
 ```
+dotnet test src/K4os.Stateful.Tests/K4os.Stateful.Tests.csproj --filter "FullyQualifiedName~ExecutorTests"
 dotnet test src/K4os.Stateful.Legacy.Tests/K4os.Stateful.Legacy.Tests.csproj --filter "FullyQualifiedName~CalculatorTests"
-dotnet test src/K4os.Stateful.Tests/K4os.Stateful.Tests.csproj --filter "FullyQualifiedName~EventHandlerRankerTests"
 ```
 
 ## Project Layout
 
-Four projects in the solution:
-
+- `K4os.Stateful` — new async implementation (active development)
+- `K4os.Stateful.Tests` — tests for the new implementation
 - `K4os.Stateful.Legacy` — original synchronous implementation
 - `K4os.Stateful.Legacy.Tests` — tests for the legacy implementation
-- `K4os.Stateful` — new async rewrite (in active development, **not** a stub)
-- `K4os.Stateful.Tests` — tests for the new implementation
 
-## Shared Concept
+## Core Concept
 
-K4os.Stateful is a **hierarchical state machine library** for .NET. Both states and events are typed objects (not enums), enabling polymorphic handler matching via class inheritance. A handler registered for `Animal` fires when the current state is `Dog : Animal` (distance = 1); a handler for `Dog` fires at distance 0 and takes priority. This applies to both state and event types independently.
+A **hierarchical state machine** where states and events are typed objects (not enums), with polymorphic handler matching via class inheritance. A handler registered for `Animal` fires when the current state is `Dog : Animal` (distance = 1); a handler for `Dog` fires at distance 0 and takes priority. This applies to both state and event types independently.
 
 ```
-TContext  — shared data accessible in all callbacks
-TState    — base class for all states (states can carry data as fields)
-TEvent    — base class for all events (events can carry data as fields)
+TContext  — shared services/infrastructure injected per-executor
+TState    — base type for all states (states carry data as fields/properties)
+TEvent    — base type for all events (events carry data as fields/properties)
 ```
 
 ---
@@ -43,10 +41,10 @@ TEvent    — base class for all events (events can carry data as fields)
 
 ### Configuration DSL
 
-Entry point: `StateMachine<TContext, TState, TEvent>.Define()` returns `IMachineConfig`.
+Entry point: `StateMachine.Configure<TContext, TState, TEvent>()` returns `IMachineConfig`.
 
 ```csharp
-var definition = StateMachine<Ctx, IState, IEvent>.Define()
+var definition = StateMachine.Configure<Ctx, IState, IEvent>()
     .In<StateA>()
         .OnEnter(x => { /* x.Context, x.State, x.CancellationToken */ })
         .OnExit(x => { })
@@ -55,149 +53,117 @@ var definition = StateMachine<Ctx, IState, IEvent>.Define()
             .GoTo(x => new StateB())
     .In<StateB>()
         .On<EventY>()
-            .Stay()   // no transition; OnExit/OnEnter not called
+            .Stay()   // no state change; OnExit/OnEnter not called
     .Build();
 ```
 
-`Build()` returns a frozen, immutable `MachineDefinition<TContext, TState, TEvent>` that is safe to share across threads. All state in the DSL builders is discarded after `Build()`.
+`Build()` returns a frozen `MachineDefinition<TContext, TState, TEvent>` safe to share across threads.
 
-### DSL interfaces (nested in `StateMachine<,,>`)
+### DSL interfaces (nested in `StateMachineConfig<,,>`)
 
 - `IMachineConfig` — `.WithStateChangeIf(pred)`, `.In<T>()`, `.Build()`
 - `IStateConfig<TCurrentState>` — `.OnEnter(...)`, `.OnExit(...)`, `.On<TEvent>()`, `.In<T>()`, `.Build()`
 - `IEventConfig<TCurrentState, TCurrentEvent>` — `.When(...)`, `.GoTo(...)`, `.Stay(...)`
 
-All callbacks have three overloads: `Func<…, ValueTask>`, `Func<…, Task>`, and `Action<…>`.  
-`.When(...)` calls accumulate as AND logic (all guards must pass).  
-`.GoTo(...)` accepts sync or async functions returning `TState`.  
-`.Stay(...)` stays in the same state without triggering `OnExit`/`OnEnter`.  
-`.WithStateChangeIf(pred)` sets a custom `Func<TState, TState, bool>` predicate (default: `!ReferenceEquals`); last call wins.
+All callbacks have three overloads: `Func<…, ValueTask>`, `Func<…, Task>`, and `Action<…>` (or `Func<…, bool>` for `.When`).  
+`.When(...)` calls accumulate as AND logic.  
+`.GoTo(...)` returns `IStateConfig<TCurrentState>` — enables chaining more handlers on the same state.  
+`.WithStateChangeIf(pred)` sets a custom `Func<TState, TState, bool>` predicate (default: `!ReferenceEquals`).
 
-### Context objects
+### Activation bundles
 
 - `Activation<TContext, TState>` — passed to `OnEnter`/`OnExit`; exposes `.Context`, `.State`, `.CancellationToken`
 - `Activation<TContext, TState, TEvent>` — passed to event handlers; adds `.Event`
 
-### Handler ranking (new API)
+### Handler ranking (`Runtime/EventHandlerRanker.cs`)
 
-Implemented in `Runtime/EventHandlerRanker.cs`. Sort key (ascending = higher priority):
+Sort key (ascending = higher priority):
 
 1. State type distance (most derived wins)
 2. State is interface (class beats interface at same distance)
 3. Event type distance (most derived wins)
 4. Event is interface (class beats interface at same distance)
 5. Has no guard (guarded handlers rank before unguarded at same specificity)
-6. Declaration order (registration order breaks remaining ties)
+6. Declaration order (stable tie-break)
 
-State handlers for `OnEnter`/`OnExit` are sorted ascending by distance (most-derived first = index 0). `OnExit` iterates forward; `OnEnter` iterates in reverse (base class fires first on enter, derived class fires first on exit).
+State handlers (`OnEnter`/`OnExit`) sorted ascending by distance — most-derived at index 0. `OnExit` iterates forward (derived→base); `OnEnter` iterates in reverse (base→derived).
 
 ### Type distance (`Runtime/TypeExtensions.cs`)
 
-`DistanceFrom(Type parent)` — cached in a static `ConcurrentDictionary`. Walks the class chain for parent classes; for interfaces, finds the class in the chain that first introduces the interface via set-difference. Interface-to-interface distance is not implemented.
+`DistanceFrom(Type parent)` — cached in a static `ConcurrentDictionary`. Class-to-class: walks `BaseType` chain. Class-to-interface: finds the class in the chain that first introduces the interface via set-difference. Interface-to-interface: throws `InvalidOperationException` (not implemented; runtime types are always concrete classes).
 
 ### Execution
 
-`definition.Create(context, state)` returns a new `MachineExecutor<TContext, TState, TEvent>`. The executor holds its own mutable state; multiple executors can share the same frozen `MachineDefinition`.
+`definition.Create(context, initialState)` returns a `MachineExecutor<TContext, TState, TEvent>`.
 
 ```csharp
 var executor = definition.Create(ctx, new IdleState());
-await executor.FireAsync(new StartEvent());
-bool matched = await executor.TryFireAsync(new UnknownEvent());
-executor.State; // current state after transitions
+await executor.FireAsync(new StartEvent());          // throws UnhandledEventException on no match
+bool matched = await executor.TryFireAsync(new UnknownEvent());  // returns false on no match
+executor.State;  // current state
 ```
 
-`MachineExecutor` public API:
+Sync wrappers: `Fire` / `TryFire` (via `.GetAwaiter().GetResult()`).
 
-- `State` — current state (read-only)
-- `FireAsync(event, ct)` — fires a transition; throws `UnhandledEventException` on no match
-- `TryFireAsync(event, ct)` — same but returns `false` on no match instead of throwing
-- `Fire` / `TryFire` — synchronous wrappers via `.GetAwaiter().GetResult()`
-
-Transition pipeline inside `FireAsync`:
+**Transition pipeline inside `FireAsync`:**
 1. `Interlocked.CompareExchange` sets in-flight flag — throws `ConcurrentFireException` if already set
-2. Ranked handlers for `(currentState.GetType(), event.GetType())` are retrieved from cache
-3. Guards evaluated in order; first passing handler is selected (short-circuit)
-4. Handler action invoked → `nextState`
-5. State-change predicate evaluated: if true, `OnExit` fires (derived→base), `_state` updated, `OnEnter` fires (base→derived); if false, `_state` updated silently
+2. Ranked handlers for `(currentState.GetType(), event.GetType())` retrieved from cache
+3. Guards evaluated in order; first passing handler short-circuits
+4. Handler action invoked → `nextState`; if it throws, `_state` is not written
+5. State-change predicate evaluated: if `true`, `OnExit` fires then `_state` updated then `OnEnter` fires; if `false`, `_state` updated silently
 6. In-flight flag cleared in `finally`
 
-Exceptions from any step propagate immediately. `_state` is only written after the action succeeds, so a throwing action leaves state unchanged.
-
-**Domain exceptions** (both inherit `Exception` directly):
+**Domain exceptions:**
 - `UnhandledEventException` — carries `.Event` and `.StateType`
-- `ConcurrentFireException` — signals re-entrant fire on same executor
+- `ConcurrentFireException` — re-entrant fire on same executor
+- `IncompleteEventHandlerException` — thrown by `Build()` when `.On<E>()` has no terminal (`.GoTo`/`.Stay`)
 
 ### MachineDefinition caching
 
-`MachineDefinition` holds two `ConcurrentDictionary` caches that start empty and populate lazily on first executor use:
-
+Two lazy `ConcurrentDictionary` caches populated on first use:
 - `_eventCache` — `(actualStateType, actualEventType)` → ranked `EventHandler[]`
 - `_stateCache` — `actualStateType` → sorted `StateHandler[]`
 
 ### Folder layout (`src/K4os.Stateful/`)
 
-- `Configuration/` — DSL builder classes: `StateMachine.Interfaces.cs`, `MachineConfigBuilder`, `StateConfigBuilder`, `EventConfigBuilder`, `StateHandlerConfig`, `EventHandlerConfig`
-- `Runtime/` — execution-time classes: `MachineDefinition`, `MachineExecutor`, `EventHandler`, `StateHandler`, `Activation`, `EventHandlerRanker`, `TypeExtensions`, `UnhandledEventException`, `ConcurrentFireException`
+- `Configuration/` — DSL builders: `StateMachine.Interfaces.cs`, `MachineConfigBuilder`, `StateConfigBuilder`, `EventConfigBuilder`, `StateHandlerConfig`, `EventHandlerConfig`
+- `Runtime/` — execution: `MachineDefinition`, `MachineExecutor`, `EventHandler`, `StateHandler`, `Activation`, `EventHandlerRanker`, `TypeExtensions`, exception types
 - `Internal/` — shared utilities (`Extensions.cs`)
-- `StateMachineConfig.cs` — `StateMachine<,,>` entry point (`.Define()`)
+- `StateMachine.cs` — static entry point (`Configure<,,>()`)
 
-### Internal builder flow
-
-1. `StateConfigBuilder<TCurrentState>` accumulates `OnEnter`/`OnExit` delegates into a mutable `StateHandlerConfig`, combining them sequentially.
-2. Calling `.In<TNext>()` or `.Build()` triggers `Flush()`, which converts the accumulated config to a frozen `StateHandler` and registers it with `MachineConfigBuilder`.
-3. `EventConfigBuilder` similarly accumulates guards and a transition action into `EventHandlerConfig`, flushed to `EventHandler` when the event scope closes.
+**Builder flush pattern:** `StateConfigBuilder` and `EventConfigBuilder` accumulate handlers into mutable config objects; calling `.In<T>()`, `.On<E>()`, or `.Build()` triggers `Flush()`, converting accumulated config to frozen handler records registered with `MachineConfigBuilder`.
 
 ---
 
 ## Legacy API (`K4os.Stateful.Legacy`)
 
-The entire library lives in `StateMachine<TContext, TState, TEvent>` split across partial class files.
-
-### Configuration
-
 ```csharp
 var config = StateMachine<Ctx, State, Event>.NewConfigurator();
 config.In<State1>()
-    .OnEnter(c => { /* c.Context, c.State */ })
-    .OnExit(c => { })
-    .On<Event1>()
-        .When(c => c.State.Flag)
-        .Goto(c => new State2())
-        .Loop();  // stay, skip OnExit/OnEnter
+    .On<Event1>().When(c => c.State.Flag).Goto(c => new State2());
+    // .Loop() instead of .Goto() to stay without lifecycle hooks
+
+var executor = config.NewExecutor(context, initialState);  // extension in StateMachineExtenders.cs
+executor.Fire(event);  // throws InvalidOperationException on ambiguity or no match
 ```
 
-- `_states`: `Type → config`
-- `_events`: `EventKey → List<config>` (struct key = stateType + eventType)
+Context objects: `IStateContext<T>` (`.Context`, `.State`) and `IEventContext<TS, TE>` (adds `.Event`).
 
-### Execution
-
-`configurator.NewExecutor(context, initialState)` (extension method in `StateMachineExtenders.cs`).
-
-`executor.Fire(event)`:
-1. Resolves handlers by type inheritance distance
-2. Evaluates `.When(...)` guards
-3. Runs all `.OnTrigger(...)` handlers
-4. Selects single closest-match transition; throws `InvalidOperationException` on ambiguity or no match
-5. Executes `OnExit → Goto → OnEnter` (`.Loop()` skips lifecycle hooks)
-
-Context objects: `IStateContext<TActualState>` (`.Context`, `.State`) and `IEventContext<TActualState, TActualEvent>` (adds `.Event`).
-
-Internal utilities: `EventKey.cs` (dict key struct), `CollectionExtender.cs` (`TryGet` with `TryGetMode`), `ContractExtender.cs` (validation), `ReflectionExtender.cs` (`TypeDistance()` with `CachedTypeDistanceMap`).
-
-> Avoid registering handlers on interfaces in the legacy API — interface distance is ambiguous (assumes longest inheritance path).
+> Avoid registering handlers on interfaces in the legacy API — interface distance is ambiguous.
 
 ---
 
 ## Tests
 
-**Legacy** (`src/K4os.Stateful.Legacy.Tests/`):
-- `CalculatorTests.cs` — end-to-end: expression calculator state machine
-- `ConfigurationTests.cs` — API contract and error cases
-- `KotlinTests.cs` — lifecycle ordering, hierarchical dispatch, guards, loop vs goto
-
 **New** (`src/K4os.Stateful.Tests/`):
-- `DslBuilderTests.cs` — DSL configuration, guard AND semantics, build immutability
-- `EventHandlerRankerTests.cs` — ranking algorithm: hierarchy precedence, class vs interface priority
-- `ActivationTests.cs` — `Activation` type conversion helpers
+- `ExecutorTests.cs` — lifecycle, entry/exit ordering, predicate, guard walk, unhandled events, concurrency
+- `DslBuilderTests.cs` — DSL wiring, AND guards, incomplete handler detection, build immutability
+- `EventHandlerRankerTests.cs` — ranking algorithm: hierarchy, class vs interface
+- `TypeExtensionsTests.cs` — distance algorithm correctness and caching
+- `ActivationTests.cs` — activation type conversion helpers
 - `MachineDefinitionTests.cs` — cache behavior
-- `ExecutorTests.cs` — executor lifecycle, entry/exit ordering, state-change predicate, guard walk, unhandled events, concurrent fire detection
+
+**Legacy** (`src/K4os.Stateful.Legacy.Tests/`):
+- `CalculatorTests.cs` — end-to-end calculator state machine
+- `KotlinTests.cs` — lifecycle ordering, hierarchical dispatch, guards
+- `ConfigurationTests.cs` — API contract and error cases
